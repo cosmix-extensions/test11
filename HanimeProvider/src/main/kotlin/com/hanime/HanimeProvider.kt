@@ -111,10 +111,11 @@ class HanimeProvider : MainAPI() {
                             source = name,
                             name = "${name} ${server.name} ${height}p",
                             url = streamUrl,
-                            referer = mainUrl,
-                            quality = quality,
                             type = ExtractorLinkType.M3U8
-                        )
+                        ) {
+                            this.quality = quality
+                            this.headers = mapOf("Referer" to mainUrl)
+                        }
                     )
                 }
             }
