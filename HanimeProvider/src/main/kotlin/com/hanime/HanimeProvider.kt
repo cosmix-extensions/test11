@@ -28,7 +28,7 @@ class HanimeProvider : MainAPI() {
         // We parse standard anchor tags for videos.
         val items = document.select("a[href^='/videos/hentai/']").mapNotNull { el ->
             val href = el.attr("abs:href")
-            val title = el.select("div.tv-title").text() ?: href.substringAfterLast("/")
+            val title = el.select("div.tv-title").text().takeIf { it.isNotBlank() } ?: href.substringAfterLast("/")
             val poster = el.select("img").attr("src")
             
             if (title.isBlank()) return@mapNotNull null
@@ -47,7 +47,7 @@ class HanimeProvider : MainAPI() {
         
         val items = document.select("a[href^='/videos/hentai/']").mapNotNull { el ->
             val href = el.attr("abs:href")
-            val title = el.select("div.tv-title").text() ?: href.substringAfterLast("/")
+            val title = el.select("div.tv-title").text().takeIf { it.isNotBlank() } ?: href.substringAfterLast("/")
             val poster = el.select("img").attr("src")
             
             if (title.isBlank()) return@mapNotNull null
@@ -64,8 +64,8 @@ class HanimeProvider : MainAPI() {
         val document = app.get(url).document
         
         // Extract basic metadata from OpenGraph tags
-        val title = document.selectFirst("meta[property=og:title]")?.attr("content") 
-            ?: document.title() 
+        val title = document.selectFirst("meta[property=og:title]")?.attr("content")?.takeIf { it.isNotBlank() }
+            ?: document.title().takeIf { it.isNotBlank() }
             ?: return null
             
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
@@ -107,7 +107,7 @@ class HanimeProvider : MainAPI() {
                     val quality = getQualityFromName(height)
                     
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = name,
                             name = "${name} ${server.name} ${height}p",
                             url = streamUrl,
