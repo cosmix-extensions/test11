@@ -1,0 +1,8 @@
+{
+  "name": "Hanime Provider",
+  "description": "Hanime - Anime Streaming Extension",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/cosmix-extensions/test11/builds/plugins.json"
+  ]
+}

@@ -1,0 +1,26 @@
+[
+    {
+        "url": "https://raw.githubusercontent.com/cosmix-extensions/test11/builds/HanimeProvider.cs3",
+        "status": 1,
+        "version": 1,
+        "name": "HanimeProvider",
+        "internalName": "HanimeProvider",
+        "authors": [
+            "Hanime Provider"
+        ],
+        "description": "Includes Hanime",
+        "fileSize": 16360,
+        "repositoryUrl": "https://github.com/cosmix-extensions/test11",
+        "language": "en",
+        "tvTypes": [
+            "AnimeMovie",
+            "Anime"
+        ],
+        "iconUrl": "https://hanime.tv/favicon.ico",
+        "apiVersion": 1,
+        "fileHash": "sha256-b21aab9692e5e522ae48b974940b2a0e6899c9a4af73fada71939935022a757d",
+        "jarFileSize": 59695,
+        "jarUrl": "https://raw.githubusercontent.com/cosmix-extensions/test11/builds/HanimeProvider.jar",
+        "jarHash": "sha256-5fdf6052d9c1392c083ab97c1d27e4808aef404dcacb39472b51169170e1ba08"
+    }
+]
