@@ -19,3 +19,11 @@ cloudstream.jar
 
 # Module build directories
 */build/
+
+# Temporary test files
+*.py
+*.html
+*.js
+*.json
+*.txt
+

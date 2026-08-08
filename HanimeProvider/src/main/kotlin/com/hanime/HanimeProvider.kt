@@ -84,23 +84,25 @@ class HanimeProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url).document
-        
-        // Extract basic metadata from OpenGraph tags
-        val title = document.selectFirst("meta[property=og:title]")?.attr("content")?.takeIf { it.isNotBlank() }
-            ?: document.title().takeIf { it.isNotBlank() }
-            ?: return null
-            
-        val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
-        val description = document.selectFirst("meta[property=og:description]")?.attr("content")
-
         val slug = url.substringAfterLast("/")
+        
+        // Fetch from cached HVS list for accurate metadata
+        val hvsList = getHvsList()
+        val item = hvsList.find { it.slug == slug } ?: return null
+        
+        val title = item.name ?: return null
+        val description = item.description?.replace(Regex("<[^>]*>"), "")?.trim()
+        val cover = item.coverUrl
+        val background = item.posterUrl
+        val tagsList = item.tags
         
         // Return a MovieLoadResponse (Anime is generally single-video on Hanime)
         // We pass the slug as data so loadLinks can fetch the API.
         return newMovieLoadResponse(title, url, TvType.Anime, slug) {
-            this.posterUrl = poster
+            this.posterUrl = cover ?: background
+            this.backgroundUrl = background
             this.plot = description
+            this.tags = tagsList
         }
     }
 
@@ -166,19 +168,22 @@ class HanimeProvider : MainAPI() {
         @JsonProperty("name") val name: String?,
         @JsonProperty("search_titles") val searchTitles: String?,
         @JsonProperty("slug") val slug: String?,
+        @JsonProperty("description") val description: String?,
         @JsonProperty("views") val views: Long?,
         @JsonProperty("cover_url") val coverUrl: String?,
         @JsonProperty("poster_url") val posterUrl: String?,
         @JsonProperty("likes") val likes: Int?,
-        @JsonProperty("created_at_unix") val createdAtUnix: Long?
+        @JsonProperty("created_at_unix") val createdAtUnix: Long?,
+        @JsonProperty("tags") val tags: List<String>?
     )
 
     private fun HvsItem.toSearchResponse(): SearchResponse? {
         val title = name ?: return null
         val url = slug?.let { "https://hanime.tv/videos/hentai/$it" } ?: return null
-        val poster = posterUrl ?: coverUrl
+        // cover_url is the portrait image, poster_url is the landscape thumbnail
+        val cover = coverUrl ?: posterUrl
         return newAnimeSearchResponse(title, url, TvType.Anime) {
-            this.posterUrl = poster
+            this.posterUrl = cover
         }
     }
 
