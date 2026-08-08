@@ -3,7 +3,7 @@ version = 1
 cloudstream {
     language = "en"
     authors = listOf("Hanime Provider")
-    description = "Includes Hanime"
+    description = "The ultimate Hanime provider. Watch top-rated, trending, and recently added anime seamlessly with series grouping."
     status = 1 
     tvTypes = listOf(
         "AnimeMovie",
