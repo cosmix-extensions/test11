@@ -27,57 +27,9 @@ class HanimeProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "latest" to "Latest Videos",
+        "recently_added" to "Recently Added",
         "trending" to "Trending",
-        "ahegao" to "Ahegao",
-        "anal" to "Anal",
-        "bdsm" to "BDSM",
-        "big%20boobs" to "Big Boobs",
-        "blow%20job" to "Blow Job",
-        "bondage" to "Bondage",
-        "boob%20job" to "Boob Job",
-        "censored" to "Censored",
-        "comedy" to "Comedy",
-        "cosplay" to "Cosplay",
-        "creampie" to "Creampie",
-        "dark%20skin" to "Dark Skin",
-        "facial" to "Facial",
-        "fantasy" to "Fantasy",
-        "filmed" to "Filmed",
-        "foot%20job" to "Foot Job",
-        "gangbang" to "Gangbang",
-        "glasses" to "Glasses",
-        "hand%20job" to "Hand Job",
-        "harem" to "Harem",
-        "hd" to "HD",
-        "horror" to "Horror",
-        "incest" to "Incest",
-        "inflation" to "Inflation",
-        "lactation" to "Lactation",
-        "maid" to "Maid",
-        "masturbation" to "Masturbation",
-        "milf" to "Milf",
-        "mind%20break" to "Mind Break",
-        "mind%20control" to "Mind Control",
-        "nekomimi" to "Nekomimi",
-        "ntr" to "NTR",
-        "nurse" to "Nurse",
-        "orgy" to "Orgy",
-        "plot" to "Plot",
-        "pov" to "POV",
-        "pregnant" to "Pregnant",
-        "public%20sex" to "Public Sex",
-        "school%20girl" to "School Girl",
-        "softcore" to "Softcore",
-        "swimsuit" to "Swimsuit",
-        "teacher" to "Teacher",
-        "tentacle" to "Tentacle",
-        "threesome" to "Threesome",
-        "toys" to "Toys",
-        "tsundere" to "Tsundere",
-        "uncensored" to "Uncensored",
-        "vanilla" to "Vanilla",
-        "virgin" to "Virgin",
+        "top_liked" to "Top Liked",
     )
 
     private fun getHeaders(): Map<String, String> {
@@ -95,8 +47,9 @@ class HanimeProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = when (request.data) {
-            "latest" -> "$mainUrl/search?order=created_at_desc&page=$page"
+            "recently_added" -> "$mainUrl/search?order=created_at_desc&page=$page"
             "trending" -> "$mainUrl/browse/trending?page=$page"
+            "top_liked" -> "$mainUrl/search?order=likes&page=$page"
             else -> "$mainUrl/browse/tags/${request.data}?page=$page"
         }
         val document = app.get(url).document
@@ -176,7 +129,10 @@ class HanimeProvider : MainAPI() {
         val title = doc.selectFirst("section#VideoDetails h1")?.text() ?: return null
         val slug  = url.substringAfterLast("/")
 
-        val poster = doc.selectFirst("img[src*='/images/covers/']")?.attr("abs:src")
+        // Use the video thumbnail poster (not the cover image)
+        val poster = doc.selectFirst("img[alt=Video poster]")?.attr("abs:src")
+            ?: doc.selectFirst("img.object-cover[src*='/images/posters/']")?.attr("abs:src")
+            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
 
         val durationText = doc.select("section#VideoDetails span.badge").firstOrNull {
             it.text().contains("min", ignoreCase = true)
