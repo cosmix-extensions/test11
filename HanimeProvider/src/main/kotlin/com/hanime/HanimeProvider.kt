@@ -1,107 +1,207 @@
 package com.hanime
 
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.network.WebViewResolver
-import com.fasterxml.jackson.annotation.JsonProperty
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 class HanimeProvider : MainAPI() {
-    override var mainUrl = "https://hanime.tv"
-    override var name = "Hanime"
-    override var lang = "en"
-    override val hasMainPage = true
-    override val supportedTypes = setOf(TvType.Anime)
+    override var mainUrl              = "https://hanime.tv"
+    override var name                 = "Hanime"
+    override val hasMainPage          = true
+    override var lang                 = "en"
+    override val hasQuickSearch       = false
+    override val supportedTypes       = setOf(TvType.NSFW)
+    override val vpnStatus            = VPNStatus.MightBeNeeded
 
-    private val apiUrl = "https://guest.freeanimehentai.net"
-
-    private var hvsCache: List<HvsItem>? = null
-
-    private suspend fun getHvsList(): List<HvsItem> {
-        return hvsCache ?: run {
-            val url = "$apiUrl/api/v11/search_hvs"
-            val interceptor = WebViewResolver(Regex("""guest\.freeanimehentai\.net"""))
-            
-            var responseText = ""
-            try {
-                responseText = app.get(url, interceptor = interceptor).text
-                if (responseText.trim().startsWith("<") || !responseText.trim().startsWith("[")) {
-                     responseText = app.get(url).text
-                }
-            } catch(e: Exception) {
-                responseText = app.get(url).text
-            }
-            
-            val startIndex = responseText.indexOf('[')
-            val endIndex = responseText.lastIndexOf(']')
-            if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
-                responseText = responseText.substring(startIndex, endIndex + 1)
-            }
-            
-            val list = AppUtils.parseJson<List<HvsItem>>(responseText)
-            hvsCache = list
-            list
-        }
+    companion object {
+        private var searchCache: List<HvsItem>? = null
+        private var cacheTime: Long = 0L
+        private const val CACHE_TTL = 3_600_000L
+        private const val FAH_API = "https://guest.freeanimehentai.net"
+        private const val SEARCH_API = "$FAH_API/api/v11/search_hvs"
+        private const val AUTH_API = "https://auth.hanime.tv"
     }
 
     override val mainPage = mainPageOf(
-        "trending" to "Trending",
-        "recently_added" to "Recently Added",
-        "top_liked" to "Top Liked"
+        "3d" to "3D",
+        "ahegao" to "Ahegao",
+        "anal" to "Anal",
+        "bdsm" to "BDSM",
+        "big%20boobs" to "Big Boobs",
+        "blow%20job" to "Blow Job",
+        "bondage" to "Bondage",
+        "boob%20job" to "Boob Job",
+        "censored" to "Censored",
+        "comedy" to "Comedy",
+        "cosplay" to "Cosplay",
+        "creampie" to "Creampie",
+        "dark%20skin" to "Dark Skin",
+        "facial" to "Facial",
+        "fantasy" to "Fantasy",
+        "filmed" to "Filmed",
+        "foot%20job" to "Foot Job",
+        "gangbang" to "Gangbang",
+        "glasses" to "Glasses",
+        "hand%20job" to "Hand Job",
+        "harem" to "Harem",
+        "hd" to "HD",
+        "horror" to "Horror",
+        "incest" to "Incest",
+        "inflation" to "Inflation",
+        "lactation" to "Lactation",
+        "maid" to "Maid",
+        "masturbation" to "Masturbation",
+        "milf" to "Milf",
+        "mind%20break" to "Mind Break",
+        "mind%20control" to "Mind Control",
+        "nekomimi" to "Nekomimi",
+        "ntr" to "NTR",
+        "nurse" to "Nurse",
+        "orgy" to "Orgy",
+        "plot" to "Plot",
+        "pov" to "POV",
+        "pregnant" to "Pregnant",
+        "public%20sex" to "Public Sex",
+        "school%20girl" to "School Girl",
+        "softcore" to "Softcore",
+        "swimsuit" to "Swimsuit",
+        "teacher" to "Teacher",
+        "tentacle" to "Tentacle",
+        "threesome" to "Threesome",
+        "toys" to "Toys",
+        "tsundere" to "Tsundere",
+        "uncensored" to "Uncensored",
+        "vanilla" to "Vanilla",
+        "virgin" to "Virgin",
     )
 
+    private fun getHeaders(): Map<String, String> {
+        val time = (System.currentTimeMillis() / 1000).toString()
+        val signature = HanimeExtractor.generateSignature(time, mainUrl)
+        return mapOf(
+            "Origin" to mainUrl,
+            "Referer" to "$mainUrl/",
+            "X-Signature-Version" to "web2",
+            "X-Time" to time,
+            "X-Signature" to signature,
+            "Content-Type" to "application/json"
+        )
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val hvsList = getHvsList()
-        if (hvsList.isEmpty()) return newHomePageResponse(request.name, emptyList())
+        val url      = "$mainUrl/browse/tags/${request.data}?page=$page"
+        val document = app.get(url).document
 
-        val sortedList = when (request.data) {
-            "trending" -> hvsList.sortedByDescending { it.views ?: 0L }
-            "recently_added" -> hvsList.sortedByDescending { it.createdAtUnix ?: 0L }
-            "top_liked" -> hvsList.sortedByDescending { it.likes ?: 0 }
-            else -> hvsList
+        val home = document.select("div.grid.grid-cols-2 a[href^=/videos/hentai/]").mapNotNull {
+            val href   = it.attr("href")
+            val title  = it.selectFirst("h3")?.text() ?: return@mapNotNull null
+            val poster = it.selectFirst("img")?.attr("abs:src") ?: return@mapNotNull null
+            if (title.isBlank() || href.isBlank()) return@mapNotNull null
+
+            newAnimeSearchResponse(
+                name = title,
+                url  = href,
+                type = TvType.NSFW
+            ) {
+                this.posterUrl     = poster
+                this.posterHeaders = mapOf("Referer" to "$mainUrl/")
+            }
         }
 
-        val itemsPerPage = 50
-        val startIndex = (page - 1) * itemsPerPage
-        val endIndex = minOf(startIndex + itemsPerPage, sortedList.size)
-        
-        if (startIndex >= sortedList.size) {
-            return newHomePageResponse(request.name, emptyList(), hasNext = false)
-        }
-
-        val pageItems = sortedList.subList(startIndex, endIndex).mapNotNull { it.toSearchResponse() }
-
-        return newHomePageResponse(request.name, pageItems, hasNext = endIndex < sortedList.size)
+        return newHomePageResponse(
+            listOf(
+                HomePageList(
+                    name               = request.name,
+                    list               = home,
+                    isHorizontalImages = true
+                )
+            ),
+            hasNext = home.isNotEmpty()
+        )
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val hvsList = getHvsList()
-        val lowerQuery = query.lowercase()
-        return hvsList.filter { 
-            (it.name?.lowercase()?.contains(lowerQuery) == true) || 
-            (it.searchTitles?.lowercase()?.contains(lowerQuery) == true) 
-        }.take(100).mapNotNull { it.toSearchResponse() }
+        val videos = fetchSearchCache()
+        if (videos.isEmpty()) return emptyList()
+
+        val q = query.lowercase().trim()
+        if (q.isBlank()) return emptyList()
+
+        val filtered = videos.filter { v ->
+            (v.name ?: "").contains(q, ignoreCase = true) ||
+                    (v.searchTitles ?: "").contains(q, ignoreCase = true) ||
+                    (v.tags ?: emptyList()).any { it.contains(q, ignoreCase = true) }
+        }
+
+        return filtered.take(24).mapNotNull { v ->
+            val slug = v.slug ?: return@mapNotNull null
+            if (slug.isBlank()) return@mapNotNull null
+            val title = v.name ?: return@mapNotNull null
+            val cover = v.coverUrl ?: v.posterUrl
+
+            newMovieSearchResponse(
+                name = title,
+                url = "/videos/hentai/$slug",
+                type = TvType.NSFW
+            ) {
+                this.posterUrl = cover
+                this.posterHeaders = mapOf("Referer" to "$mainUrl/")
+            }
+        }
+    }
+
+    private suspend fun fetchSearchCache(): List<HvsItem> {
+        val now = System.currentTimeMillis()
+        searchCache?.takeIf { now - cacheTime < CACHE_TTL }?.let { return it }
+        return runCatching {
+            val response = app.get(SEARCH_API, headers = getHeaders()).text
+            parseJson<List<HvsItem>>(response).also {
+                searchCache = it
+                cacheTime = now
+            }
+        }.getOrNull() ?: searchCache ?: emptyList()
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val slug = url.substringAfterLast("/")
-        
-        // Fetch from cached HVS list for accurate metadata
-        val hvsList = getHvsList()
-        val item = hvsList.find { it.slug == slug } ?: return null
-        
-        val title = item.name ?: return null
-        val description = item.description?.replace(Regex("<[^>]*>"), "")?.trim()
-        val cover = item.coverUrl
-        val background = item.posterUrl
-        val tagsList = item.tags
-        
-        // Return a MovieLoadResponse (Anime is generally single-video on Hanime)
-        // We pass the slug as data so loadLinks can fetch the API.
-        return newMovieLoadResponse(title, url, TvType.Anime, slug) {
-            this.posterUrl = cover ?: background
-            this.backgroundPosterUrl = background
-            this.plot = description
-            this.tags = tagsList
+        val doc   = app.get(url, headers = getHeaders()).document
+        val title = doc.selectFirst("section#VideoDetails h1")?.text() ?: return null
+        val slug  = url.substringAfterLast("/")
+
+        val poster = doc.selectFirst("img[src*='/images/covers/']")?.attr("abs:src")
+
+        val durationText = doc.select("section#VideoDetails span.badge").firstOrNull {
+            it.text().contains("min", ignoreCase = true)
+        }?.text()
+        val duration = durationText?.let { Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+
+        val tags = doc.select("a[href^=\"/browse/tags/\"]").map { it.text() }
+
+        val plot = doc.select("h2:contains(Synopsis)").first()?.parent()?.selectFirst("div[data-expand-content]")?.text()
+
+        val yearText = doc.select("button[data-tip]").firstOrNull()?.attr("data-tip")
+        val year     = yearText?.let { Regex("(\\d{4})").find(it)?.groupValues?.get(1)?.toIntOrNull() }
+
+        val recommendations = doc.select("section#NextVideoSection a[href]").mapNotNull { a ->
+            val recTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapNotNull null
+            val recPoster = fixUrlNull(a.selectFirst("img.aspect-video")?.attr("src")) ?: return@mapNotNull null
+            val recUrl    = fixUrl(a.attr("href"))
+            newMovieSearchResponse(recTitle, recUrl, TvType.NSFW) {
+                this.posterUrl = recPoster
+            }
+        }
+
+        return newMovieLoadResponse(title, url, TvType.NSFW, slug) {
+            this.posterUrl       = poster
+            this.posterHeaders   = mapOf("Referer" to "$mainUrl/")
+            this.plot            = plot
+            this.year            = year
+            this.tags            = tags
+            this.duration        = duration
+            this.recommendations = recommendations
         }
     }
 
@@ -111,77 +211,111 @@ class HanimeProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Data contains the slug from load()
-        val videoPageUrl = "$mainUrl/videos/hentai/$data"
-        
-        // Load the actual video page via WebView. The page's JavaScript will:
-        // 1. POST to /api/v11/handshake with an AES-GCM encrypted token
-        // 2. Decrypt the response to get the HLS manifest URL
-        // 3. Fetch the HLS manifest from /hls/<video_id>/<token>
-        // We intercept that /hls/ request to get the real m3u8 URL.
-        val interceptor = WebViewResolver(
-            Regex("""/hls/\d+/|.*\.m3u8"""),
-            additionalUrls = listOf(Regex(""".*""")),
-            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        )
-        
-        try {
-            val response = app.get(videoPageUrl, interceptor = interceptor)
-            val hlsUrl = response.url
-            
-            if (hlsUrl.contains("/hls/")) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = "$name Auto",
-                        url = hlsUrl,
-                        type = ExtractorLinkType.M3U8
-                    ) {
-                        this.quality = Qualities.Unknown.value
-                        this.headers = mapOf("Referer" to "$mainUrl/")
-                    }
-                )
-                
-                // Also try to parse the m3u8 manifest for individual quality streams
-                try {
-                    val m3u8Text = app.get(hlsUrl, headers = mapOf("Referer" to "$mainUrl/")).text
-                    val baseUrl = hlsUrl.substringBeforeLast("/") + "/"
-                    
-                    val qualityRegex = Regex("""#EXT-X-STREAM-INF:.*?RESOLUTION=\d+x(\d+).*?\n(.+)""")
-                    qualityRegex.findAll(m3u8Text).forEach { match ->
-                        val height = match.groupValues[1]
-                        val streamPath = match.groupValues[2].trim()
-                        val streamUrl = if (streamPath.startsWith("http")) streamPath 
-                                        else if (streamPath.startsWith("/")) "$mainUrl$streamPath"
-                                        else "$baseUrl$streamPath"
-                        val quality = getQualityFromName(height)
-                        
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = "$name ${height}p",
-                                url = streamUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.quality = quality
-                                this.headers = mapOf("Referer" to "$mainUrl/")
-                            }
-                        )
-                    }
-                } catch (_: Exception) {
-                    // Individual quality parsing failed, but we already have the Auto stream
-                }
-                
-                return true
-            }
-            return false
-        } catch (e: Exception) {
-            e.printStackTrace()
+        if (data.isBlank()) return false
+
+        val time = (System.currentTimeMillis() / 1000).toString()
+        val signature = HanimeExtractor.generateSignature(time, mainUrl)
+
+        Log.d("Hanime", "slug=$data time=$time")
+
+        // Build handshake payload
+        val payloadJson = buildJsonObject {
+            put("timestamp_unix", time.toLong())
+            put("directive", "htv_player_handshake")
+            put("slug", data)
+        }.toString()
+
+        // Encrypt the payload into a token
+        val encryptedToken = runCatching {
+            HanimeExtractor.encryptHandshakeToken(payloadJson)
+        }.getOrNull() ?: run {
+            Log.e("Hanime", "token encrypt fail")
             return false
         }
+
+        // Build handshake request headers
+        val handshakeHeaders = mapOf(
+            "accept" to "application/json",
+            "content-type" to "application/json",
+            "x-signature-version" to "web2",
+            "x-signature" to signature,
+            "x-time" to time,
+            "x-csrf-token" to "null",
+            "origin" to mainUrl,
+            "referer" to "$mainUrl/"
+        )
+
+        // Build JSON body
+        val jsonBody = buildJsonObject {
+            put("token", encryptedToken)
+        }
+
+        // POST handshake
+        val response = runCatching {
+            app.post(
+                "$AUTH_API/api/v11/handshake",
+                headers = handshakeHeaders,
+                json = jsonBody,
+                allowRedirects = true
+            )
+        }.getOrNull() ?: run {
+            Log.e("Hanime", "handshake request fail")
+            return false
+        }
+
+        if (!response.isSuccessful) {
+            Log.e("Hanime", "handshake fail code=${response.code}")
+            return false
+        }
+
+        // Get x-token from response headers
+        val xToken = response.headers["x-token"] ?: response.headers["X-Token"] ?: run {
+            Log.e("Hanime", "x-token missing")
+            return false
+        }
+
+        // Decrypt x-token to get video sources
+        val decryptedJson = runCatching { HanimeExtractor.decryptXToken(xToken) }.getOrNull() ?: run {
+            Log.e("Hanime", "x-token decrypt fail")
+            return false
+        }
+
+        val handshakeResponse = try {
+            parseJson<HanimeExtractor.HandshakeResponse>(decryptedJson)
+        } catch (e: Exception) {
+            Log.e("Hanime", "parse fail: ${e.message}")
+            return false
+        }
+
+        Log.d("Hanime", "sources=${handshakeResponse.sources.size}")
+
+        // Add each video source
+        for (source in handshakeResponse.sources) {
+            if (source.kind != "normal" || source.src.isBlank()) {
+                Log.d("Hanime", "skip kind=${source.kind} label=${source.label}")
+                continue
+            }
+
+            val fullUrl = if (source.src.startsWith("http")) source.src else "$mainUrl${source.src}"
+
+            Log.d("Hanime", "label=${source.label} height=${source.height} url=$fullUrl")
+
+            callback(
+                newExtractorLink(
+                    source = "Hanime",
+                    name = "Hanime - ${source.label.ifBlank { "${source.height}p" }}",
+                    url = fullUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = source.height
+                }
+            )
+        }
+        return true
     }
-    
-    // Data classes to parse the Hanime JSON API
+
+    // Data classes to parse the Hanime search JSON API
     data class HvsItem(
         @JsonProperty("name") val name: String?,
         @JsonProperty("search_titles") val searchTitles: String?,
@@ -194,16 +328,4 @@ class HanimeProvider : MainAPI() {
         @JsonProperty("created_at_unix") val createdAtUnix: Long?,
         @JsonProperty("tags") val tags: List<String>?
     )
-
-    private fun HvsItem.toSearchResponse(): SearchResponse? {
-        val title = name ?: return null
-        val url = slug?.let { "https://hanime.tv/videos/hentai/$it" } ?: return null
-        // cover_url is the portrait image, poster_url is the landscape thumbnail
-        val cover = coverUrl ?: posterUrl
-        return newAnimeSearchResponse(title, url, TvType.Anime) {
-            this.posterUrl = cover
-        }
-    }
-
 }
-
