@@ -148,12 +148,24 @@ class HanimeProvider : MainAPI() {
         val cover = item.coverUrl
         val background = item.posterUrl
         val tagsList = item.tags
+        val doc = app.get(url, headers = getHeaders()).document
+        val moreFromHeader = doc.select("h2:contains(More from)").firstOrNull()
+        val recommendationSection = moreFromHeader?.parents()?.select("section")?.firstOrNull() ?: moreFromHeader?.parent()
+        val recommendations = recommendationSection?.select("a[href^=/videos/hentai/]")?.mapNotNull { a ->
+            val recTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapNotNull null
+            val recPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src")) ?: return@mapNotNull null
+            val recUrl    = fixUrl(a.attr("href"))
+            newAnimeSearchResponse(recTitle, recUrl, TvType.Anime) {
+                this.posterUrl = recPoster
+            }
+        }
         
         return newMovieLoadResponse(title, url, TvType.Anime, slug) {
             this.posterUrl = background ?: cover
             this.backgroundPosterUrl = background
             this.plot = description
             this.tags = tagsList
+            this.recommendations = recommendations
         }
     }
 
