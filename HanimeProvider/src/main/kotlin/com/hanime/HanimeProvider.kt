@@ -45,11 +45,37 @@ class HanimeProvider : MainAPI() {
         )
     }
 
+    private fun HvsItem.toSearchResponse(): SearchResponse? {
+        val title = name ?: return null
+        val itemUrl = slug?.let { "$mainUrl/videos/hentai/$it" } ?: return null
+        val poster = posterUrl ?: coverUrl
+        val cover = coverUrl ?: posterUrl
+        return newAnimeSearchResponse(title, itemUrl, TvType.Anime) {
+            this.posterUrl = cover
+        }
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (request.data == "recently_added" || request.data == "top_liked") {
+            val videos = fetchSearchCache()
+            if (videos.isEmpty()) return newHomePageResponse(emptyList(), false)
+
+            val sorted = if (request.data == "recently_added") {
+                videos.sortedByDescending { it.createdAtUnix ?: 0L }
+            } else {
+                videos.sortedByDescending { it.likes ?: 0 }
+            }
+
+            val items = sorted.drop((page - 1) * 24).take(24).mapNotNull { it.toSearchResponse() }
+            
+            return newHomePageResponse(
+                listOf(HomePageList(request.name, items, isHorizontalImages = false)),
+                hasNext = items.isNotEmpty()
+            )
+        }
+
         val url = when (request.data) {
-            "recently_added" -> "$mainUrl/search?order=created_at_desc&page=$page"
             "trending" -> "$mainUrl/browse/trending?page=$page"
-            "top_liked" -> "$mainUrl/search?order=likes&page=$page"
             else -> "$mainUrl/browse/tags/${request.data}?page=$page"
         }
         val document = app.get(url).document
@@ -75,7 +101,7 @@ class HanimeProvider : MainAPI() {
                 HomePageList(
                     name               = request.name,
                     list               = home,
-                    isHorizontalImages = true
+                    isHorizontalImages = false
                 )
             ),
             hasNext = home.isNotEmpty()
@@ -95,21 +121,7 @@ class HanimeProvider : MainAPI() {
                     (v.tags ?: emptyList()).any { it.contains(q, ignoreCase = true) }
         }
 
-        return filtered.take(24).mapNotNull { v ->
-            val slug = v.slug ?: return@mapNotNull null
-            if (slug.isBlank()) return@mapNotNull null
-            val title = v.name ?: return@mapNotNull null
-            val cover = v.coverUrl ?: v.posterUrl
-
-            newMovieSearchResponse(
-                name = title,
-                url = "/videos/hentai/$slug",
-                type = TvType.Anime
-            ) {
-                this.posterUrl = cover
-                this.posterHeaders = mapOf("Referer" to "$mainUrl/")
-            }
-        }
+        return filtered.take(24).mapNotNull { it.toSearchResponse() }
     }
 
     private suspend fun fetchSearchCache(): List<HvsItem> {
@@ -125,44 +137,23 @@ class HanimeProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val doc   = app.get(url, headers = getHeaders()).document
-        val title = doc.selectFirst("section#VideoDetails h1")?.text() ?: return null
-        val slug  = url.substringAfterLast("/")
+        val slug = url.substringAfterLast("/")
 
-        // Use the video thumbnail poster (not the cover image)
-        val poster = doc.selectFirst("img[alt=Video poster]")?.attr("abs:src")
-            ?: doc.selectFirst("img.object-cover[src*='/images/posters/']")?.attr("abs:src")
-            ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
-
-        val durationText = doc.select("section#VideoDetails span.badge").firstOrNull {
-            it.text().contains("min", ignoreCase = true)
-        }?.text()
-        val duration = durationText?.let { Regex("(\\d+)").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-
-        val tags = doc.select("a[href^=\"/browse/tags/\"]").map { it.text() }
-
-        val plot = doc.select("h2:contains(Synopsis)").first()?.parent()?.selectFirst("div[data-expand-content]")?.text()
-
-        val yearText = doc.select("button[data-tip]").firstOrNull()?.attr("data-tip")
-        val year     = yearText?.let { Regex("(\\d{4})").find(it)?.groupValues?.get(1)?.toIntOrNull() }
-
-        val recommendations = doc.select("section#NextVideoSection a[href]").mapNotNull { a ->
-            val recTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapNotNull null
-            val recPoster = fixUrlNull(a.selectFirst("img.aspect-video")?.attr("src")) ?: return@mapNotNull null
-            val recUrl    = fixUrl(a.attr("href"))
-            newMovieSearchResponse(recTitle, recUrl, TvType.Anime) {
-                this.posterUrl = recPoster
-            }
-        }
-
+        // Fetch from cached HVS list for accurate metadata
+        val hvsList = fetchSearchCache()
+        val item = hvsList.find { it.slug == slug } ?: return null
+        
+        val title = item.name ?: return null
+        val description = item.description?.replace(Regex("<[^>]*>"), "")?.trim()
+        val cover = item.coverUrl
+        val background = item.posterUrl
+        val tagsList = item.tags
+        
         return newMovieLoadResponse(title, url, TvType.Anime, slug) {
-            this.posterUrl       = poster
-            this.posterHeaders   = mapOf("Referer" to "$mainUrl/")
-            this.plot            = plot
-            this.year            = year
-            this.tags            = tags
-            this.duration        = duration
-            this.recommendations = recommendations
+            this.posterUrl = background ?: cover
+            this.backgroundUrl = background
+            this.plot = description
+            this.tags = tagsList
         }
     }
 
