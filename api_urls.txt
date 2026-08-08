@@ -1,0 +1,6 @@
+https://api.iconify.design/clarity.json?icons=image-gallery-solid
+https://api.iconify.design/codicon.json?icons=account
+https://api.iconify.design/mdi.json?icons=account-plus%2Caccount-plus-outline%2Cclose%2Ccookie%2Cdiscord%2Cfeedback%2Cfile-document-box%2Cgavel%2Cguy-fawkes-mask%2Cmessage-text-outline%2Csearch%2Cshuffle-variant%2Ctrending-up%2Cverified
+https://api.iconify.design/material-symbols.json?icons=apps%2Cbrowse%2Ccrown%2Chome
+https://api.iconify.design/line-md.json?icons=menu
+https://api.iconify.design/ic.json?icons=baseline-discord

@@ -15,49 +15,72 @@ class HanimeProvider : MainAPI() {
 
     private val apiUrl = "https://guest.freeanimehentai.net"
 
+    private var hvsCache: List<HvsItem>? = null
+
+    private suspend fun getHvsList(): List<HvsItem> {
+        return hvsCache ?: run {
+            val url = "$apiUrl/api/v11/search_hvs"
+            val interceptor = WebViewResolver(Regex("""guest\.freeanimehentai\.net"""))
+            
+            var responseText = ""
+            try {
+                responseText = app.get(url, interceptor = interceptor).text
+                if (responseText.trim().startsWith("<") || !responseText.trim().startsWith("[")) {
+                     responseText = app.get(url).text
+                }
+            } catch(e: Exception) {
+                responseText = app.get(url).text
+            }
+            
+            val startIndex = responseText.indexOf('[')
+            val endIndex = responseText.lastIndexOf(']')
+            if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
+                responseText = responseText.substring(startIndex, endIndex + 1)
+            }
+            
+            val list = AppUtils.parseJson<List<HvsItem>>(responseText)
+            hvsCache = list
+            list
+        }
+    }
+
     override val mainPage = mainPageOf(
-        "$mainUrl/trending" to "Trending",
-        "$mainUrl/browse/recently_added" to "Recently Added",
+        "trending" to "Trending",
+        "recently_added" to "Recently Added",
+        "top_liked" to "Top Liked"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val document = app.get(request.data).document
-        
-        // This is a basic implementation placeholder. 
-        // Hanime typically uses Nuxt or APIs for main page data as well.
-        // We parse standard anchor tags for videos.
-        val items = document.select("a[href^='/videos/hentai/']").mapNotNull { el ->
-            val href = el.attr("abs:href")
-            val title = el.select("div.tv-title").text().takeIf { it.isNotBlank() } ?: href.substringAfterLast("/")
-            val poster = el.select("img").attr("src")
-            
-            if (title.isBlank()) return@mapNotNull null
-            
-            newAnimeSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = poster
-            }
-        }.distinctBy { it.url }
+        val hvsList = getHvsList()
+        if (hvsList.isEmpty()) return newHomePageResponse(request.name, emptyList())
 
-        return newHomePageResponse(request.name, items, hasNext = false)
+        val sortedList = when (request.data) {
+            "trending" -> hvsList.sortedByDescending { it.views ?: 0L }
+            "recently_added" -> hvsList.sortedByDescending { it.createdAtUnix ?: 0L }
+            "top_liked" -> hvsList.sortedByDescending { it.likes ?: 0 }
+            else -> hvsList
+        }
+
+        val itemsPerPage = 50
+        val startIndex = (page - 1) * itemsPerPage
+        val endIndex = minOf(startIndex + itemsPerPage, sortedList.size)
+        
+        if (startIndex >= sortedList.size) {
+            return newHomePageResponse(request.name, emptyList(), hasNext = false)
+        }
+
+        val pageItems = sortedList.subList(startIndex, endIndex).mapNotNull { it.toSearchResponse() }
+
+        return newHomePageResponse(request.name, pageItems, hasNext = endIndex < sortedList.size)
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "$mainUrl/search?q=${query.replace(" ", "+")}"
-        val document = app.get(searchUrl).document
-        
-        val items = document.select("a[href^='/videos/hentai/']").mapNotNull { el ->
-            val href = el.attr("abs:href")
-            val title = el.select("div.tv-title").text().takeIf { it.isNotBlank() } ?: href.substringAfterLast("/")
-            val poster = el.select("img").attr("src")
-            
-            if (title.isBlank()) return@mapNotNull null
-            
-            newAnimeSearchResponse(title, href, TvType.Anime) {
-                this.posterUrl = poster
-            }
-        }.distinctBy { it.url }
-
-        return items
+        val hvsList = getHvsList()
+        val lowerQuery = query.lowercase()
+        return hvsList.filter { 
+            (it.name?.lowercase()?.contains(lowerQuery) == true) || 
+            (it.searchTitles?.lowercase()?.contains(lowerQuery) == true) 
+        }.take(100).mapNotNull { it.toSearchResponse() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -139,6 +162,25 @@ class HanimeProvider : MainAPI() {
     }
     
     // Data classes to parse the Hanime JSON API
+    data class HvsItem(
+        @JsonProperty("name") val name: String?,
+        @JsonProperty("search_titles") val searchTitles: String?,
+        @JsonProperty("slug") val slug: String?,
+        @JsonProperty("views") val views: Long?,
+        @JsonProperty("cover_url") val coverUrl: String?,
+        @JsonProperty("poster_url") val posterUrl: String?,
+        @JsonProperty("likes") val likes: Int?,
+        @JsonProperty("created_at_unix") val createdAtUnix: Long?
+    ) {
+        fun toSearchResponse(): SearchResponse? {
+            val title = name ?: return null
+            val url = slug?.let { "https://hanime.tv/videos/hentai/$it" } ?: return null
+            return newAnimeSearchResponse(title, url, TvType.Anime) {
+                this.posterUrl = this@HvsItem.posterUrl ?: this@HvsItem.coverUrl
+            }
+        }
+    }
+
     data class HanimeVideoResponse(
         @JsonProperty("videos_manifest") val videos_manifest: VideosManifest?
     )
