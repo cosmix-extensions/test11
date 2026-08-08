@@ -158,19 +158,17 @@ class HanimeProvider : MainAPI() {
             val epPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src"))
             val epUrl    = fixUrl(a.attr("href"))
             
-            Episode(
-                data = epUrl.substringAfterLast("/"),
-                name = epTitle,
-                episode = index + 1,
-                posterUrl = epPoster
-            )
+            newEpisode(epUrl.substringAfterLast("/")) {
+                this.name = epTitle
+                this.episode = index + 1
+                this.posterUrl = epPoster
+            }
         } ?: listOf(
-            Episode(
-                data = slug,
-                name = title,
-                episode = 1,
-                posterUrl = background ?: cover
-            )
+            newEpisode(slug) {
+                this.name = title
+                this.episode = 1
+                this.posterUrl = background ?: cover
+            }
         )
         
         return newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, episodes) {
