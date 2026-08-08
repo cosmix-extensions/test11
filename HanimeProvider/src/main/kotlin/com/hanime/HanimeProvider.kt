@@ -121,7 +121,7 @@ class HanimeProvider : MainAPI() {
         // We intercept that /hls/ request to get the real m3u8 URL.
         val interceptor = WebViewResolver(
             Regex("""/hls/\d+/"""),
-            additionalUrls = listOf(Regex("""hanime\.tv""")),
+            additionalUrls = listOf(Regex(""".*""")),
         )
         
         try {
