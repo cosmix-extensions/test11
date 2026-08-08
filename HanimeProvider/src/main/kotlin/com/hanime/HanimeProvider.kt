@@ -158,13 +158,13 @@ class HanimeProvider : MainAPI() {
             val epPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src"))
             val epUrl    = fixUrl(a.attr("href"))
             
-            newEpisode(epUrl.substringAfterLast("/")) {
+            newEpisode(epUrl) {
                 this.name = epTitle
                 this.episode = index + 1
                 this.posterUrl = epPoster
             }
         } ?: listOf(
-            newEpisode(slug) {
+            newEpisode(url) {
                 this.name = title
                 this.episode = 1
                 this.posterUrl = background ?: cover
@@ -187,16 +187,17 @@ class HanimeProvider : MainAPI() {
     ): Boolean {
         if (data.isBlank()) return false
 
+        val slug = data.trimEnd('/').substringAfterLast("/").substringBefore("?")
         val time = (System.currentTimeMillis() / 1000).toString()
         val signature = HanimeExtractor.generateSignature(time, mainUrl)
 
-        Log.d("Hanime", "slug=$data time=$time")
+        Log.d("Hanime", "slug=$slug time=$time")
 
         // Build handshake payload
         val payloadJson = buildJsonObject {
             put("timestamp_unix", time.toLong())
             put("directive", "htv_player_handshake")
-            put("slug", data)
+            put("slug", slug)
         }.toString()
 
         // Encrypt the payload into a token
