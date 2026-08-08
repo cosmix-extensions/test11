@@ -171,13 +171,14 @@ class HanimeProvider : MainAPI() {
         @JsonProperty("poster_url") val posterUrl: String?,
         @JsonProperty("likes") val likes: Int?,
         @JsonProperty("created_at_unix") val createdAtUnix: Long?
-    ) {
-        fun toSearchResponse(): SearchResponse? {
-            val title = name ?: return null
-            val url = slug?.let { "https://hanime.tv/videos/hentai/$it" } ?: return null
-            return newAnimeSearchResponse(title, url, TvType.Anime) {
-                this.posterUrl = this@HvsItem.posterUrl ?: this@HvsItem.coverUrl
-            }
+    )
+
+    private fun HvsItem.toSearchResponse(): SearchResponse? {
+        val title = name ?: return null
+        val url = slug?.let { "https://hanime.tv/videos/hentai/$it" } ?: return null
+        val poster = posterUrl ?: coverUrl
+        return newAnimeSearchResponse(title, url, TvType.Anime) {
+            this.posterUrl = poster
         }
     }
 
