@@ -14,7 +14,7 @@ class HanimeProvider : MainAPI() {
     override val hasMainPage          = true
     override var lang                 = "en"
     override val hasQuickSearch       = false
-    override val supportedTypes       = setOf(TvType.NSFW)
+    override val supportedTypes       = setOf(TvType.Anime)
     override val vpnStatus            = VPNStatus.MightBeNeeded
 
     companion object {
@@ -27,7 +27,7 @@ class HanimeProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "3d" to "3D",
+        "" to "Latest Videos",
         "ahegao" to "Ahegao",
         "anal" to "Anal",
         "bdsm" to "BDSM",
@@ -93,7 +93,11 @@ class HanimeProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url      = "$mainUrl/browse/tags/${request.data}?page=$page"
+        val url = if (request.data.isBlank()) {
+            "$mainUrl/browse/trending?page=$page"
+        } else {
+            "$mainUrl/browse/tags/${request.data}?page=$page"
+        }
         val document = app.get(url).document
 
         val home = document.select("div.grid.grid-cols-2 a[href^=/videos/hentai/]").mapNotNull {
@@ -105,7 +109,7 @@ class HanimeProvider : MainAPI() {
             newAnimeSearchResponse(
                 name = title,
                 url  = href,
-                type = TvType.NSFW
+                type = TvType.Anime
             ) {
                 this.posterUrl     = poster
                 this.posterHeaders = mapOf("Referer" to "$mainUrl/")
@@ -146,7 +150,7 @@ class HanimeProvider : MainAPI() {
             newMovieSearchResponse(
                 name = title,
                 url = "/videos/hentai/$slug",
-                type = TvType.NSFW
+                type = TvType.Anime
             ) {
                 this.posterUrl = cover
                 this.posterHeaders = mapOf("Referer" to "$mainUrl/")
@@ -189,12 +193,12 @@ class HanimeProvider : MainAPI() {
             val recTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapNotNull null
             val recPoster = fixUrlNull(a.selectFirst("img.aspect-video")?.attr("src")) ?: return@mapNotNull null
             val recUrl    = fixUrl(a.attr("href"))
-            newMovieSearchResponse(recTitle, recUrl, TvType.NSFW) {
+            newMovieSearchResponse(recTitle, recUrl, TvType.Anime) {
                 this.posterUrl = recPoster
             }
         }
 
-        return newMovieLoadResponse(title, url, TvType.NSFW, slug) {
+        return newMovieLoadResponse(title, url, TvType.Anime, slug) {
             this.posterUrl       = poster
             this.posterHeaders   = mapOf("Referer" to "$mainUrl/")
             this.plot            = plot
