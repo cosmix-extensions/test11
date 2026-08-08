@@ -120,8 +120,9 @@ class HanimeProvider : MainAPI() {
         // 3. Fetch the HLS manifest from /hls/<video_id>/<token>
         // We intercept that /hls/ request to get the real m3u8 URL.
         val interceptor = WebViewResolver(
-            Regex("""/hls/\d+/"""),
+            Regex("""/hls/\d+/|.*\.m3u8"""),
             additionalUrls = listOf(Regex(""".*""")),
+            userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
         try {
