@@ -100,7 +100,7 @@ class HanimeProvider : MainAPI() {
         // We pass the slug as data so loadLinks can fetch the API.
         return newMovieLoadResponse(title, url, TvType.Anime, slug) {
             this.posterUrl = cover ?: background
-            this.backgroundUrl = background
+            this.backgroundPosterUrl = background
             this.plot = description
             this.tags = tagsList
         }
