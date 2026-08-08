@@ -151,7 +151,7 @@ class HanimeProvider : MainAPI() {
         
         return newMovieLoadResponse(title, url, TvType.Anime, slug) {
             this.posterUrl = background ?: cover
-            this.backgroundUrl = background
+            this.backgroundPosterUrl = background
             this.plot = description
             this.tags = tagsList
         }
