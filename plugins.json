@@ -9,7 +9,7 @@
             "Hanime Provider"
         ],
         "description": "Includes Hanime",
-        "fileSize": 28079,
+        "fileSize": 28761,
         "repositoryUrl": "https://github.com/cosmix-extensions/test11",
         "language": "en",
         "tvTypes": [
@@ -18,9 +18,9 @@
         ],
         "iconUrl": "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://hanime.tv/home&size=128",
         "apiVersion": 1,
-        "fileHash": "sha256-3a930e16744e32bdb52d3cbc848e34002f2c2ce5999dbd5599e0ad395ef80ac4",
-        "jarFileSize": 100226,
+        "fileHash": "sha256-1de953d7ed6f08c758d3da7eb425dc4dc24853ec0801fac194a1c0b484d1ebb4",
+        "jarFileSize": 102124,
         "jarUrl": "https://raw.githubusercontent.com/cosmix-extensions/test11/builds/HanimeProvider.jar",
-        "jarHash": "sha256-32aee479751c2bdb8130ae1302087c6b0c52df1965eb073487929268e60aad65"
+        "jarHash": "sha256-8f5b357f64b3430f7196ab2f737353f05cdbc94f953942b0be4e5b821a9798b9"
     }
 ]
