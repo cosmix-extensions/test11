@@ -4,7 +4,6 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.fasterxml.jackson.annotation.JsonProperty
-import org.jsoup.nodes.Document
 
 class HanimeProvider : MainAPI() {
     override var mainUrl = "https://hanime.tv"
@@ -113,50 +112,68 @@ class HanimeProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         // Data contains the slug from load()
-        val videoApiUrl = "$apiUrl/api/v8/video?id=$data"
+        val videoPageUrl = "$mainUrl/videos/hentai/$data"
         
-        // Use WebViewResolver to attempt bypassing Cloudflare on the guest API
-        val interceptor = WebViewResolver(Regex("""guest\.freeanimehentai\.net"""))
+        // Load the actual video page via WebView. The page's JavaScript will:
+        // 1. POST to /api/v11/handshake with an AES-GCM encrypted token
+        // 2. Decrypt the response to get the HLS manifest URL
+        // 3. Fetch the HLS manifest from /hls/<video_id>/<token>
+        // We intercept that /hls/ request to get the real m3u8 URL.
+        val interceptor = WebViewResolver(
+            Regex("""/hls/\d+/"""),
+            additionalUrls = listOf(Regex("""hanime\.tv""")),
+        )
         
         try {
-            var responseText = app.get(videoApiUrl, interceptor = interceptor).text
+            val response = app.get(videoPageUrl, interceptor = interceptor)
+            val hlsUrl = response.url
             
-            // If Android WebView wraps the JSON response in HTML <pre> or <body> tags
-            val startIndex = responseText.indexOf('{')
-            val endIndex = responseText.lastIndexOf('}')
-            if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
-                responseText = responseText.substring(startIndex, endIndex + 1)
-            } else {
-                // Fallback: If the JSON was completely downloaded instead of displayed,
-                // the WebView response might be empty or missing JSON.
-                // We can re-fetch via app.get() because the Turnstile clearance cookies are now saved.
-                responseText = app.get(videoApiUrl).text
-            }
-            
-            // Parse JSON manually or use AppUtils.parseJson
-            val json = AppUtils.parseJson<HanimeVideoResponse>(responseText)
-            
-            // Extract the actual video stream URLs
-            json.videos_manifest?.servers?.forEach { server ->
-                server.streams?.forEach { stream ->
-                    val streamUrl = stream.url ?: return@forEach
-                    val height = stream.height?.toString() ?: "Unknown"
-                    val quality = getQualityFromName(height)
+            if (hlsUrl.contains("/hls/")) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name Auto",
+                        url = hlsUrl,
+                        type = ExtractorLinkType.M3U8
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        this.headers = mapOf("Referer" to "$mainUrl/")
+                    }
+                )
+                
+                // Also try to parse the m3u8 manifest for individual quality streams
+                try {
+                    val m3u8Text = app.get(hlsUrl, headers = mapOf("Referer" to "$mainUrl/")).text
+                    val baseUrl = hlsUrl.substringBeforeLast("/") + "/"
                     
-                    callback.invoke(
-                        newExtractorLink(
-                            source = name,
-                            name = "${name} ${server.name ?: ""} ${height}p".trim(),
-                            url = streamUrl,
-                            type = ExtractorLinkType.M3U8
-                        ) {
-                            this.quality = quality
-                            this.headers = mapOf("Referer" to "$mainUrl/")
-                        }
-                    )
+                    val qualityRegex = Regex("""#EXT-X-STREAM-INF:.*?RESOLUTION=\d+x(\d+).*?\n(.+)""")
+                    qualityRegex.findAll(m3u8Text).forEach { match ->
+                        val height = match.groupValues[1]
+                        val streamPath = match.groupValues[2].trim()
+                        val streamUrl = if (streamPath.startsWith("http")) streamPath 
+                                        else if (streamPath.startsWith("/")) "$mainUrl$streamPath"
+                                        else "$baseUrl$streamPath"
+                        val quality = getQualityFromName(height)
+                        
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "$name ${height}p",
+                                url = streamUrl,
+                                type = ExtractorLinkType.M3U8
+                            ) {
+                                this.quality = quality
+                                this.headers = mapOf("Referer" to "$mainUrl/")
+                            }
+                        )
+                    }
+                } catch (_: Exception) {
+                    // Individual quality parsing failed, but we already have the Auto stream
                 }
+                
+                return true
             }
-            return true
+            return false
         } catch (e: Exception) {
             e.printStackTrace()
             return false
@@ -187,23 +204,5 @@ class HanimeProvider : MainAPI() {
         }
     }
 
-    data class HanimeVideoResponse(
-        @JsonProperty("videos_manifest") val videos_manifest: VideosManifest?
-    )
-
-    data class VideosManifest(
-        @JsonProperty("servers") val servers: List<Server>?
-    )
-
-    data class Server(
-        @JsonProperty("id") val id: Int?,
-        @JsonProperty("name") val name: String?,
-        @JsonProperty("streams") val streams: List<Stream>?
-    )
-
-    data class Stream(
-        @JsonProperty("id") val id: Int?,
-        @JsonProperty("height") val height: Int?,
-        @JsonProperty("url") val url: String?
-    )
 }
+
