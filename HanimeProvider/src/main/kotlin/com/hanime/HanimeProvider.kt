@@ -121,7 +121,17 @@ class HanimeProvider : MainAPI() {
                     (v.tags ?: emptyList()).any { it.contains(q, ignoreCase = true) }
         }
 
-        return filtered.take(24).mapNotNull { it.toSearchResponse() }
+        val sorted = filtered.sortedWith(
+            compareByDescending<HvsItem> { v ->
+                var score = 0
+                if (v.name?.contains(q, ignoreCase = true) == true) score += 100
+                if (v.searchTitles?.contains(q, ignoreCase = true) == true) score += 50
+                if (v.tags?.any { it.equals(q, ignoreCase = true) } == true) score += 10
+                score
+            }.thenByDescending { it.createdAtUnix ?: 0L }
+        )
+
+        return sorted.take(24).mapNotNull { it.toSearchResponse() }
     }
 
     private suspend fun fetchSearchCache(): List<HvsItem> {
