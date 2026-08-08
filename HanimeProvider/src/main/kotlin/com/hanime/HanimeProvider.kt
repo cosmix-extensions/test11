@@ -172,7 +172,7 @@ class HanimeProvider : MainAPI() {
         )
         
         return newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, episodes) {
-            this.posterUrl = background ?: cover
+            this.posterUrl = cover ?: background
             this.backgroundPosterUrl = background
             this.plot = description
             this.tags = tagsList
