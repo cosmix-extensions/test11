@@ -108,12 +108,12 @@ class HanimeProvider : MainAPI() {
         )
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
+    override suspend fun search(query: String, page: Int): SearchResponseList {
         val videos = fetchSearchCache()
-        if (videos.isEmpty()) return emptyList()
+        if (videos.isEmpty()) return newSearchResponseList(emptyList(), hasNext = false)
 
         val q = query.lowercase().trim()
-        if (q.isBlank()) return emptyList()
+        if (q.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
 
         val filtered = videos.filter { v ->
             (v.name ?: "").contains(q, ignoreCase = true) ||
@@ -131,7 +131,15 @@ class HanimeProvider : MainAPI() {
             }.thenByDescending { it.createdAtUnix ?: 0L }
         )
 
-        return sorted.take(24).mapNotNull { it.toSearchResponse() }
+        val pageSize = 24
+        val startIndex = (page - 1) * pageSize
+        val endIndex = minOf(startIndex + pageSize, sorted.size)
+        val pageItems = if (startIndex < sorted.size) sorted.subList(startIndex, endIndex) else emptyList()
+
+        return newSearchResponseList(
+            pageItems.mapNotNull { it.toSearchResponse() },
+            hasNext = endIndex < sorted.size
+        )
     }
 
     private suspend fun fetchSearchCache(): List<HvsItem> {
