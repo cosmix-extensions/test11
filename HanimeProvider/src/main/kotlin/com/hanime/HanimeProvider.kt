@@ -91,10 +91,22 @@ class HanimeProvider : MainAPI() {
         val videoApiUrl = "$apiUrl/api/v8/video?id=$data"
         
         // Use WebViewResolver to attempt bypassing Cloudflare on the guest API
-        val interceptor = WebViewResolver(Regex("freeanimehentai"))
+        val interceptor = WebViewResolver(Regex("""guest\.freeanimehentai\.net"""))
         
         try {
-            val responseText = app.get(videoApiUrl, interceptor = interceptor).text
+            var responseText = app.get(videoApiUrl, interceptor = interceptor).text
+            
+            // If Android WebView wraps the JSON response in HTML <pre> or <body> tags
+            val startIndex = responseText.indexOf('{')
+            val endIndex = responseText.lastIndexOf('}')
+            if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
+                responseText = responseText.substring(startIndex, endIndex + 1)
+            } else {
+                // Fallback: If the JSON was completely downloaded instead of displayed,
+                // the WebView response might be empty or missing JSON.
+                // We can re-fetch via app.get() because the Turnstile clearance cookies are now saved.
+                responseText = app.get(videoApiUrl).text
+            }
             
             // Parse JSON manually or use AppUtils.parseJson
             val json = AppUtils.parseJson<HanimeVideoResponse>(responseText)
@@ -109,12 +121,12 @@ class HanimeProvider : MainAPI() {
                     callback.invoke(
                         newExtractorLink(
                             source = name,
-                            name = "${name} ${server.name} ${height}p",
+                            name = "${name} ${server.name ?: ""} ${height}p".trim(),
                             url = streamUrl,
                             type = ExtractorLinkType.M3U8
                         ) {
                             this.quality = quality
-                            this.headers = mapOf("Referer" to mainUrl)
+                            this.headers = mapOf("Referer" to "$mainUrl/")
                         }
                     )
                 }
