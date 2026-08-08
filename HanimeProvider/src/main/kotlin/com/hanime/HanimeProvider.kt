@@ -95,7 +95,7 @@ class HanimeProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = when (request.data) {
-            "latest" -> "$mainUrl/browse/new-uploads?page=$page"
+            "latest" -> "$mainUrl/search?order=created_at_desc&page=$page"
             "trending" -> "$mainUrl/browse/trending?page=$page"
             else -> "$mainUrl/browse/tags/${request.data}?page=$page"
         }
