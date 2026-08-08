@@ -27,7 +27,8 @@ class HanimeProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "" to "Latest Videos",
+        "latest" to "Latest Videos",
+        "trending" to "Trending",
         "ahegao" to "Ahegao",
         "anal" to "Anal",
         "bdsm" to "BDSM",
@@ -93,10 +94,10 @@ class HanimeProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (request.data.isBlank()) {
-            "$mainUrl/browse/trending?page=$page"
-        } else {
-            "$mainUrl/browse/tags/${request.data}?page=$page"
+        val url = when (request.data) {
+            "latest" -> "$mainUrl/browse/new-uploads?page=$page"
+            "trending" -> "$mainUrl/browse/trending?page=$page"
+            else -> "$mainUrl/browse/tags/${request.data}?page=$page"
         }
         val document = app.get(url).document
 
