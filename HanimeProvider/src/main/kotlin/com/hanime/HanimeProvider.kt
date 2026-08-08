@@ -150,22 +150,34 @@ class HanimeProvider : MainAPI() {
         val tagsList = item.tags
         val doc = app.get(url, headers = getHeaders()).document
         val moreFromHeader = doc.select("h2:contains(More from)").firstOrNull()
+        val seriesTitle = moreFromHeader?.text()?.replace("More from", "", ignoreCase = true)?.trim() ?: title
         val recommendationSection = moreFromHeader?.parents()?.select("section")?.firstOrNull() ?: moreFromHeader?.parent()
-        val recommendations = recommendationSection?.select("a[href^=/videos/hentai/]")?.mapNotNull { a ->
-            val recTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapNotNull null
-            val recPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src")) ?: return@mapNotNull null
-            val recUrl    = fixUrl(a.attr("href"))
-            newAnimeSearchResponse(recTitle, recUrl, TvType.Anime) {
-                this.posterUrl = recPoster
-            }
-        }
         
-        return newMovieLoadResponse(title, url, TvType.Anime, slug) {
+        val episodes = recommendationSection?.select("a[href^=/videos/hentai/]")?.mapIndexedNotNull { index, a ->
+            val epTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapIndexedNotNull null
+            val epPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src"))
+            val epUrl    = fixUrl(a.attr("href"))
+            
+            Episode(
+                data = epUrl.substringAfterLast("/"),
+                name = epTitle,
+                episode = index + 1,
+                posterUrl = epPoster
+            )
+        } ?: listOf(
+            Episode(
+                data = slug,
+                name = title,
+                episode = 1,
+                posterUrl = background ?: cover
+            )
+        )
+        
+        return newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, episodes) {
             this.posterUrl = background ?: cover
             this.backgroundPosterUrl = background
             this.plot = description
             this.tags = tagsList
-            this.recommendations = recommendations
         }
     }
 
