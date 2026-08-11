@@ -14,7 +14,7 @@ class HanimeProvider : MainAPI() {
     override val hasMainPage          = true
     override var lang                 = "en"
     override val hasQuickSearch       = false
-    override val supportedTypes       = setOf(TvType.Anime)
+    override val supportedTypes       = setOf(TvType.Others)
     override val vpnStatus            = VPNStatus.MightBeNeeded
 
     companion object {
@@ -73,7 +73,7 @@ class HanimeProvider : MainAPI() {
         val itemUrl = slug?.let { "$mainUrl/videos/hentai/$it" } ?: return null
         val poster = posterUrl ?: coverUrl
         val cover = coverUrl ?: posterUrl
-        return newAnimeSearchResponse(title, itemUrl, TvType.Anime) {
+        return newAnimeSearchResponse(title, itemUrl, TvType.Others) {
             this.posterUrl = cover
         }
     }
@@ -112,7 +112,7 @@ class HanimeProvider : MainAPI() {
             newAnimeSearchResponse(
                 name = title,
                 url  = href,
-                type = TvType.Anime
+                type = TvType.Others
             ) {
                 this.posterUrl     = poster
                 this.posterHeaders = mapOf("Referer" to "$mainUrl/")
@@ -212,7 +212,7 @@ class HanimeProvider : MainAPI() {
             }
         )
         
-        return newTvSeriesLoadResponse(seriesTitle, url, TvType.Anime, episodes) {
+        return newTvSeriesLoadResponse(seriesTitle, url, TvType.Others, episodes) {
             this.posterUrl = cover ?: background
             this.backgroundPosterUrl = background
             this.plot = description
