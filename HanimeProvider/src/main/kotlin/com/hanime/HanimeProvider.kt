@@ -4,10 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import kotlinx.serialization.json.buildJsonArray
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 class HanimeProvider : MainAPI() {
     override var mainUrl              = "https://hanime.tv"
@@ -66,30 +62,41 @@ class HanimeProvider : MainAPI() {
         )
     }
 
-    // Connects to Hanime's official search engine for search and recently added content
+    // Connects to Hanime's official search engine safely without complex JSON builders
     private suspend fun fetchFromSearchApi(query: String, page: Int, orderBy: String = "created_at_unix"): List<SearchResponse> {
-        val payload = buildJsonObject {
-            put("search_text", query)
-            put("tags", buildJsonArray { })
-            put("tags_mode", "AND")
-            put("brands", buildJsonArray { })
-            put("blacklist", buildJsonArray { })
-            put("order_by", orderBy)
-            put("ordering", "desc")
-            put("page", page)
+        val payload = mapOf(
+            "search_text" to query,
+            "tags" to emptyList<String>(),
+            "tags_mode" to "AND",
+            "brands" to emptyList<String>(),
+            "blacklist" to emptyList<String>(),
+            "order_by" to orderBy,
+            "ordering" to "desc",
+            "page" to page
+        )
+        
+        val response = try {
+            app.post(
+                SEARCH_API, 
+                json = payload, 
+                headers = mapOf("Content-Type" to "application/json", "Origin" to "https://hanime.tv")
+            ).text
+        } catch (e: Exception) {
+            return emptyList()
         }
         
-        val response = app.post(
-            SEARCH_API, 
-            json = payload, 
-            headers = mapOf("Content-Type" to "application/json", "Origin" to "https://hanime.tv")
-        ).text
+        val searchData = try {
+            AppUtils.parseJson<SearchApiResult>(response)
+        } catch (e: Exception) { 
+            return emptyList() 
+        }
         
-        val jsonNode = AppUtils.parseJson<com.fasterxml.jackson.databind.JsonNode>(response)
-        val hitsNode = jsonNode.get("hits")
-        val hitsString = if (hitsNode?.isTextual == true) hitsNode.asText() else hitsNode?.toString() ?: "[]"
-        
-        val items = AppUtils.parseJson<List<HvsItem>>(hitsString)
+        val hitsString = searchData.hits ?: "[]"
+        val items = try {
+            AppUtils.parseJson<List<HvsItem>>(hitsString)
+        } catch (e: Exception) { 
+            emptyList() 
+        }
         
         return items.mapNotNull { item ->
             val title = item.name ?: return@mapNotNull null
@@ -106,39 +113,39 @@ class HanimeProvider : MainAPI() {
             val orderBy = if (request.data == "recently_added") "created_at_unix" else "likes"
             
             try {
-                // Fetch perfectly sorted data from the API
                 val items = fetchFromSearchApi(query = "", page = page - 1, orderBy = orderBy)
-                return newHomePageResponse(
-                    listOf(HomePageList(request.name, items, isHorizontalImages = false)),
-                    hasNext = items.isNotEmpty()
-                )
+                if (items.isNotEmpty()) {
+                    return newHomePageResponse(
+                        listOf(HomePageList(request.name, items, isHorizontalImages = false)),
+                        hasNext = true
+                    )
+                }
             } catch (e: Exception) {
                 Log.e("Hanime", "Main API failed: ${e.message}")
-                
-                // Absolute Fallback for homepage via HTML extraction if API ever goes down
-                if (request.data == "recently_added" && page == 1) {
-                    val doc = app.get(mainUrl).document
-                    val home = doc.select("a[href^=/videos/hentai/]").mapNotNull {
-                        val href = it.attr("href")
-                        val img = it.selectFirst("img") ?: return@mapNotNull null
-                        val title = it.selectFirst(".tv-title, h3")?.text() 
-                                    ?: img.attr("alt").takeIf { a -> a.isNotBlank() } ?: return@mapNotNull null
-                        val poster = img.attr("abs:src")
-                        
-                        if (href.isBlank() || poster.isBlank()) return@mapNotNull null
-
-                        newAnimeSearchResponse(title, href, TvType.Others) { 
-                            this.posterUrl = poster 
-                        }
-                    }.distinctBy { it.url }
-                    
-                    return newHomePageResponse(listOf(HomePageList(request.name, home)), hasNext = false)
-                }
-                return newHomePageResponse(emptyList(), false)
             }
+
+            // HTML Fallback if API fails
+            if (request.data == "recently_added" && page == 1) {
+                val doc = app.get(mainUrl).document
+                val home = doc.select("a[href^=/videos/hentai/]").mapNotNull {
+                    val href = it.attr("href")
+                    val img = it.selectFirst("img") ?: return@mapNotNull null
+                    val title = it.selectFirst(".tv-title, h3")?.text() 
+                                ?: img.attr("alt").takeIf { a -> a.isNotBlank() } ?: return@mapNotNull null
+                    val poster = img.attr("abs:src")
+                    
+                    if (href.isBlank() || poster.isBlank()) return@mapNotNull null
+
+                    newAnimeSearchResponse(title, href, TvType.Others) { 
+                        this.posterUrl = poster 
+                    }
+                }.distinctBy { it.url }
+                
+                return newHomePageResponse(listOf(HomePageList(request.name, home)), hasNext = false)
+            }
+            return newHomePageResponse(emptyList(), false)
         }
 
-        // Handle trending and category tags via HTML extraction
         val url = when (request.data) {
             "trending" -> "$mainUrl/browse/trending?page=$page"
             else -> "$mainUrl/browse/tags/${request.data}?page=$page"
@@ -151,24 +158,14 @@ class HanimeProvider : MainAPI() {
             val poster = it.selectFirst("img")?.attr("abs:src") ?: return@mapNotNull null
             if (title.isBlank() || href.isBlank()) return@mapNotNull null
 
-            newAnimeSearchResponse(
-                name = title,
-                url  = href,
-                type = TvType.Others
-            ) {
+            newAnimeSearchResponse(title, href, TvType.Others) {
                 this.posterUrl     = poster
                 this.posterHeaders = mapOf("Referer" to "$mainUrl/")
             }
         }
 
         return newHomePageResponse(
-            listOf(
-                HomePageList(
-                    name               = request.name,
-                    list               = home,
-                    isHorizontalImages = false
-                )
-            ),
+            listOf(HomePageList(name = request.name, list = home, isHorizontalImages = false)),
             hasNext = home.isNotEmpty()
         )
     }
@@ -187,14 +184,13 @@ class HanimeProvider : MainAPI() {
         val slug = url.substringAfterLast("/")
 
         try {
-            // Use native Video API for accurate metadata and posters
             val apiResponse = app.get("$VIDEO_API$slug", headers = getHeaders()).text
-            val json = parseJson<HanimeVideoDetails>(apiResponse)
+            val json = AppUtils.parseJson<HanimeVideoDetails>(apiResponse)
             
             val title = json.hentai_video?.name ?: slug
             val description = json.hentai_video?.description?.replace(Regex("<[^>]*>"), "")?.trim()
-            val portrait = json.hentai_video?.cover_url     // Actual Thumbnail Image
-            val landscape = json.hentai_video?.poster_url  // Landscape Cover Photo
+            val portrait = json.hentai_video?.cover_url     
+            val landscape = json.hentai_video?.poster_url  
             val tagsList = json.hentai_video?.hentai_tags?.mapNotNull { it.text } ?: emptyList()
             
             val episodesList = json.hentai_franchise?.hentai_franchise_hentai_videos
@@ -217,14 +213,13 @@ class HanimeProvider : MainAPI() {
             }
             
             return newTvSeriesLoadResponse(title, url, TvType.Others, episodes) {
-                this.posterUrl = portrait ?: landscape // Fix: Shows correct portrait thumbnail on details page
+                this.posterUrl = portrait ?: landscape 
                 this.backgroundPosterUrl = landscape ?: portrait 
                 this.plot = description
                 this.tags = tagsList
             }
             
         } catch (e: Exception) {
-            // Aggressive fallback using HTML and Nuxt script extraction
             val doc = app.get(url, headers = getHeaders()).document
             val script = doc.select("script:containsData(window.__NUXT__)").html()
             
@@ -282,11 +277,8 @@ class HanimeProvider : MainAPI() {
 
         Log.d("Hanime", "slug=$slug time=$time")
 
-        val payloadJson = buildJsonObject {
-            put("timestamp_unix", time.toLong())
-            put("directive", "htv_player_handshake")
-            put("slug", slug)
-        }.toString()
+        // Simple string JSON - no complex builders needed
+        val payloadJson = """{"timestamp_unix":${time.toLong()},"directive":"htv_player_handshake","slug":"$slug"}"""
 
         val encryptedToken = runCatching {
             HanimeExtractor.encryptHandshakeToken(payloadJson)
@@ -306,9 +298,8 @@ class HanimeProvider : MainAPI() {
             "referer" to "$mainUrl/"
         )
 
-        val jsonBody = buildJsonObject {
-            put("token", encryptedToken)
-        }
+        // Standard map for JSON payload
+        val jsonBody = mapOf("token" to encryptedToken)
 
         val response = runCatching {
             app.post(
@@ -338,7 +329,7 @@ class HanimeProvider : MainAPI() {
         }
 
         val handshakeResponse = try {
-            parseJson<HanimeExtractor.HandshakeResponse>(decryptedJson)
+            AppUtils.parseJson<HanimeExtractor.HandshakeResponse>(decryptedJson)
         } catch (e: Exception) {
             Log.e("Hanime", "parse fail: ${e.message}")
             return false
@@ -364,7 +355,11 @@ class HanimeProvider : MainAPI() {
         return true
     }
 
-    // Updated Data Classes for Search API and Video API
+    // Safe Data Classes
+    data class SearchApiResult(
+        @JsonProperty("hits") val hits: String?
+    )
+
     data class HvsItem(
         @JsonProperty("name") val name: String?,
         @JsonProperty("slug") val slug: String?,
