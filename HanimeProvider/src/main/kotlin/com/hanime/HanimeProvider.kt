@@ -62,7 +62,6 @@ class HanimeProvider : MainAPI() {
         )
     }
 
-    // Connects to Hanime's official search engine safely and handles pagination perfectly
     private suspend fun fetchFromSearchApi(query: String, page: Int, orderBy: String = "created_at_unix"): List<SearchResponse> {
         val payload = mapOf(
             "search_text" to query,
@@ -86,15 +85,8 @@ class HanimeProvider : MainAPI() {
         }
         
         return try {
-            val searchData = AppUtils.parseJson<Map<String, Any>>(responseText)
-            val hitsData = searchData["hits"]
-            
-            // Handles both stringified JSON and normal JSON Array for flawless scrolling
-            val items: List<HvsItem> = if (hitsData is String) {
-                AppUtils.parseJson<List<HvsItem>>(hitsData)
-            } else {
-                AppUtils.parseJson<List<HvsItem>>(AppUtils.toJson(hitsData))
-            }
+            val searchData = AppUtils.parseJson<SearchResponseWrapper>(responseText)
+            val items = searchData.hits ?: emptyList()
             
             items.mapNotNull { item ->
                 val title = item.name ?: return@mapNotNull null
@@ -114,19 +106,17 @@ class HanimeProvider : MainAPI() {
             val orderBy = if (request.data == "recently_added") "created_at_unix" else "likes"
             
             try {
-                // Cloudstream pagination (1, 2, 3...) mapped to Hanime pagination (0, 1, 2...)
                 val items = fetchFromSearchApi(query = "", page = page - 1, orderBy = orderBy)
                 if (items.isNotEmpty()) {
                     return newHomePageResponse(
                         listOf(HomePageList(request.name, items, isHorizontalImages = false)),
-                        hasNext = true // Enables scrolling for page 2, 3, etc.
+                        hasNext = true
                     )
                 }
             } catch (e: Exception) {
                 Log.e("Hanime", "Main API failed: ${e.message}")
             }
 
-            // HTML Fallback only applies to page 1 if API goes down
             if (request.data == "recently_added" && page == 1) {
                 val doc = app.get(mainUrl).document
                 val home = doc.select("a[href^=/videos/hentai/]").mapNotNull {
@@ -192,10 +182,9 @@ class HanimeProvider : MainAPI() {
             val title = json.hentai_video?.name ?: slug
             val description = json.hentai_video?.description?.replace(Regex("<[^>]*>"), "")?.trim()
             val portrait = json.hentai_video?.cover_url     
-            val landscape = json.hentai_video?.poster_url  // This is the Video Thumbnail
+            val landscape = json.hentai_video?.poster_url  
             val tagsList = json.hentai_video?.hentai_tags?.mapNotNull { it.text } ?: emptyList()
             
-            // Set thumbnail priority to landscape (Video Thumbnail) first
             val videoThumbnail = landscape ?: portrait
             
             val episodesList = json.hentai_franchise?.hentai_franchise_hentai_videos
@@ -218,7 +207,6 @@ class HanimeProvider : MainAPI() {
             }
             
             return newTvSeriesLoadResponse(title, url, TvType.Others, episodes) {
-                // Now Details Page will show the Video Thumbnail
                 this.posterUrl = videoThumbnail 
                 this.backgroundPosterUrl = videoThumbnail 
                 this.plot = description
@@ -360,6 +348,10 @@ class HanimeProvider : MainAPI() {
         }
         return true
     }
+
+    data class SearchResponseWrapper(
+        @JsonProperty("hits") val hits: List<HvsItem>?
+    )
 
     data class HvsItem(
         @JsonProperty("name") val name: String?,
