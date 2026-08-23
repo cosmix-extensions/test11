@@ -62,6 +62,15 @@ class HanimeProvider : MainAPI() {
         )
     }
 
+    private fun HvsItem.toSearchResponse(): SearchResponse? {
+        val title = name ?: return null
+        val itemUrl = slug?.let { "$mainUrl/videos/hentai/$it" } ?: return null
+        val cover = coverUrl ?: posterUrl
+        return newAnimeSearchResponse(title, itemUrl, TvType.Others) {
+            this.posterUrl = cover
+        }
+    }
+
     private suspend fun fetchFromSearchApi(query: String, page: Int, orderBy: String = "created_at_unix"): List<SearchResponse> {
         val payload = mapOf(
             "search_text" to query,
@@ -85,17 +94,12 @@ class HanimeProvider : MainAPI() {
         }
         
         return try {
+            // No need for toJson anymore, properly extracts the hits string
             val searchData = AppUtils.parseJson<SearchResponseWrapper>(responseText)
-            val items = searchData.hits ?: emptyList()
+            val hitsString = searchData.hits ?: "[]"
+            val items = AppUtils.parseJson<List<HvsItem>>(hitsString)
             
-            items.mapNotNull { item ->
-                val title = item.name ?: return@mapNotNull null
-                val itemUrl = item.slug?.let { "$mainUrl/videos/hentai/$it" } ?: return@mapNotNull null
-                val poster = item.coverUrl ?: item.posterUrl
-                newAnimeSearchResponse(title, itemUrl, TvType.Others) {
-                    this.posterUrl = poster
-                }
-            }
+            items.mapNotNull { it.toSearchResponse() }
         } catch (e: Exception) {
             emptyList()
         }
@@ -117,6 +121,7 @@ class HanimeProvider : MainAPI() {
                 Log.e("Hanime", "Main API failed: ${e.message}")
             }
 
+            // HTML fallback if API goes down completely
             if (request.data == "recently_added" && page == 1) {
                 val doc = app.get(mainUrl).document
                 val home = doc.select("a[href^=/videos/hentai/]").mapNotNull {
@@ -175,87 +180,48 @@ class HanimeProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val slug = url.substringAfterLast("/")
 
-        try {
-            val apiResponse = app.get("$VIDEO_API$slug", headers = getHeaders()).text
-            val json = AppUtils.parseJson<HanimeVideoDetails>(apiResponse)
+        // Using official Video API to fetch meta data instead of the dead cache API
+        val apiResponse = runCatching { app.get("$VIDEO_API$slug", headers = getHeaders()).text }.getOrNull()
+        val json = apiResponse?.let { AppUtils.parseJson<HanimeVideoDetails>(it) }
+        
+        val title = json?.hentai_video?.name ?: slug
+        val description = json?.hentai_video?.description?.replace(Regex("<[^>]*>"), "")?.trim()
+        val cover = json?.hentai_video?.cover_url
+        val background = json?.hentai_video?.poster_url
+        val tagsList = json?.hentai_video?.hentai_tags?.mapNotNull { it.text } ?: emptyList()
+
+        // Exactly like your old code: HTML fetching to get the original landscape video thumbnails for episodes!
+        val doc = app.get(url, headers = getHeaders()).document
+        val moreFromHeader = doc.select("h2:contains(More from)").firstOrNull()
+        val seriesTitle = moreFromHeader?.text()?.replace("More from", "", ignoreCase = true)?.trim() ?: title
+        val recommendationSection = moreFromHeader?.parents()?.select("section")?.firstOrNull() ?: moreFromHeader?.parent()
+        
+        val episodes = recommendationSection?.select("a[href^=/videos/hentai/]")?.mapIndexedNotNull { index, a ->
+            val epTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapIndexedNotNull null
             
-            val title = json.hentai_video?.name ?: slug
-            val description = json.hentai_video?.description?.replace(Regex("<[^>]*>"), "")?.trim()
-            val portrait = json.hentai_video?.cover_url     
-            val landscape = json.hentai_video?.poster_url  
-            val tagsList = json.hentai_video?.hentai_tags?.mapNotNull { it.text } ?: emptyList()
+            // This grabs the landscape thumbnail perfectly!
+            val epPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src")) 
+            val epUrl    = fixUrl(a.attr("href"))
             
-            val videoThumbnail = landscape ?: portrait
-            
-            val episodesList = json.hentai_franchise?.hentai_franchise_hentai_videos
-            val episodes = if (!episodesList.isNullOrEmpty()) {
-                episodesList.mapIndexedNotNull { index, ep ->
-                    newEpisode("$mainUrl/videos/hentai/${ep.slug}") {
-                        this.name = ep.name
-                        this.episode = index + 1
-                        this.posterUrl = ep.poster_url ?: ep.cover_url
-                    }
-                }
-            } else {
-                listOf(
-                    newEpisode(url) {
-                        this.name = title
-                        this.episode = 1
-                        this.posterUrl = videoThumbnail
-                    }
-                )
+            newEpisode(epUrl) {
+                this.name = epTitle
+                this.episode = index + 1
+                this.posterUrl = epPoster
             }
-            
-            return newTvSeriesLoadResponse(title, url, TvType.Others, episodes) {
-                this.posterUrl = videoThumbnail 
-                this.backgroundPosterUrl = videoThumbnail 
-                this.plot = description
-                this.tags = tagsList
+        } ?: listOf(
+            newEpisode(url) {
+                this.name = title
+                this.episode = 1
+                this.posterUrl = background ?: cover
             }
-            
-        } catch (e: Exception) {
-            val doc = app.get(url, headers = getHeaders()).document
-            val script = doc.select("script:containsData(window.__NUXT__)").html()
-            
-            val coverMatch = Regex(""""cover_url":"([^"]+)"""").find(script)?.groupValues?.get(1)
-            val posterMatch = Regex(""""poster_url":"([^"]+)"""").find(script)?.groupValues?.get(1)
-            
-            val title = doc.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore(" - Hanime") ?: slug
-            val description = doc.selectFirst("meta[property=og:description]")?.attr("content")
-            
-            val landscapeHtml = posterMatch ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
-            val portraitHtml = coverMatch ?: landscapeHtml
-            
-            val videoThumbnailHtml = landscapeHtml ?: portraitHtml
-            
-            val moreFromHeader = doc.select("h2:contains(More from)").firstOrNull()
-            val seriesTitle = moreFromHeader?.text()?.replace("More from", "", ignoreCase = true)?.trim() ?: title
-            val recommendationSection = moreFromHeader?.parents()?.select("section")?.firstOrNull() ?: moreFromHeader?.parent()
-            
-            val episodes = recommendationSection?.select("a[href^=/videos/hentai/]")?.mapIndexedNotNull { index, a ->
-                val epTitle  = a.selectFirst("span.line-clamp-2")?.text() 
-                               ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapIndexedNotNull null
-                val epPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src"))
-                val epUrl    = fixUrl(a.attr("href"))
-                
-                newEpisode(epUrl) {
-                    this.name = epTitle
-                    this.episode = index + 1
-                    this.posterUrl = epPoster
-                }
-            } ?: listOf(
-                newEpisode(url) {
-                    this.name = title
-                    this.episode = 1
-                    this.posterUrl = videoThumbnailHtml
-                }
-            )
-            
-            return newTvSeriesLoadResponse(seriesTitle, url, TvType.Others, episodes) {
-                this.posterUrl = videoThumbnailHtml
-                this.backgroundPosterUrl = videoThumbnailHtml
-                this.plot = description
-            }
+        )
+        
+        // Exact same details response as your old code
+        return newTvSeriesLoadResponse(seriesTitle, url, TvType.Others, episodes) {
+            this.posterUrl = cover ?: background
+            this.backgroundPosterUrl = background
+            this.plot = description
+            this.tags = tagsList
         }
     }
 
@@ -349,8 +315,9 @@ class HanimeProvider : MainAPI() {
         return true
     }
 
+    // Data classes optimized to prevent compile errors
     data class SearchResponseWrapper(
-        @JsonProperty("hits") val hits: List<HvsItem>?
+        @JsonProperty("hits") val hits: String?
     )
 
     data class HvsItem(
@@ -361,8 +328,7 @@ class HanimeProvider : MainAPI() {
     )
 
     data class HanimeVideoDetails(
-        @JsonProperty("hentai_video") val hentai_video: HentaiVideo?,
-        @JsonProperty("hentai_franchise") val hentai_franchise: HentaiFranchise?
+        @JsonProperty("hentai_video") val hentai_video: HentaiVideo?
     )
     
     data class HentaiVideo(
@@ -375,16 +341,5 @@ class HanimeProvider : MainAPI() {
     
     data class HentaiTag(
         @JsonProperty("text") val text: String?
-    )
-    
-    data class HentaiFranchise(
-        @JsonProperty("hentai_franchise_hentai_videos") val hentai_franchise_hentai_videos: List<HentaiFranchiseVideo>?
-    )
-    
-    data class HentaiFranchiseVideo(
-        @JsonProperty("name") val name: String?,
-        @JsonProperty("slug") val slug: String?,
-        @JsonProperty("cover_url") val cover_url: String?,
-        @JsonProperty("poster_url") val poster_url: String?
     )
 }
