@@ -81,7 +81,28 @@ class HanimeProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         if (request.data == "recently_added" || request.data == "top_liked") {
             val videos = fetchSearchCache()
-            if (videos.isEmpty()) return newHomePageResponse(emptyList(), false)
+            
+            // Fallback for recently_added if the API is down
+            if (videos.isEmpty() && request.data == "recently_added") {
+                val document = app.get(mainUrl).document
+                val home = document.select("div.grid.grid-cols-2 a[href^=/videos/hentai/]").mapNotNull {
+                    val href   = it.attr("href")
+                    val title  = it.selectFirst("h3")?.text() ?: return@mapNotNull null
+                    val poster = it.selectFirst("img")?.attr("abs:src") ?: return@mapNotNull null
+                    if (title.isBlank() || href.isBlank()) return@mapNotNull null
+
+                    newAnimeSearchResponse(title, href, TvType.Others) {
+                        this.posterUrl     = poster
+                        this.posterHeaders = mapOf("Referer" to "$mainUrl/")
+                    }
+                }
+                return newHomePageResponse(
+                    listOf(HomePageList(request.name, home, isHorizontalImages = false)),
+                    hasNext = false
+                )
+            } else if (videos.isEmpty()) {
+                return newHomePageResponse(emptyList(), false)
+            }
 
             val sorted = if (request.data == "recently_added") {
                 videos.sortedByDescending { it.createdAtUnix ?: 0L }
@@ -180,16 +201,20 @@ class HanimeProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val slug = url.substringAfterLast("/")
 
-        // Fetch from cached HVS list for accurate metadata
+        // Attempt to fetch from cached HVS list, but DO NOT return null if it fails
         val hvsList = fetchSearchCache()
-        val item = hvsList.find { it.slug == slug } ?: return null
+        val item = hvsList.find { it.slug == slug }
         
-        val title = item.name ?: return null
-        val description = item.description?.replace(Regex("<[^>]*>"), "")?.trim()
-        val cover = item.coverUrl
-        val background = item.posterUrl
-        val tagsList = item.tags
         val doc = app.get(url, headers = getHeaders()).document
+        
+        // HTML Fallback: If API fails, it will extract info directly from the HTML meta tags
+        val title = item?.name ?: doc.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore(" - Hanime") ?: slug
+        val description = item?.description?.replace(Regex("<[^>]*>"), "")?.trim() 
+                          ?: doc.selectFirst("meta[property=og:description]")?.attr("content")
+        val cover = item?.coverUrl ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
+        val background = item?.posterUrl ?: cover
+        val tagsList = item?.tags ?: emptyList()
+        
         val moreFromHeader = doc.select("h2:contains(More from)").firstOrNull()
         val seriesTitle = moreFromHeader?.text()?.replace("More from", "", ignoreCase = true)?.trim() ?: title
         val recommendationSection = moreFromHeader?.parents()?.select("section")?.firstOrNull() ?: moreFromHeader?.parent()
@@ -345,4 +370,3 @@ class HanimeProvider : MainAPI() {
         @JsonProperty("tags") val tags: List<String>?
     )
 }
-
