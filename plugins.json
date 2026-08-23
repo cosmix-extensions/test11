@@ -9,7 +9,7 @@
             "Hanime Provider"
         ],
         "description": "The ultimate Hanime provider. Watch top-rated, trending, and recently added anime seamlessly with series grouping.",
-        "fileSize": 31663,
+        "fileSize": 34167,
         "repositoryUrl": "https://github.com/cosmix-extensions/test11",
         "language": "en",
         "tvTypes": [
@@ -17,9 +17,9 @@
         ],
         "iconUrl": "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&url=https://hanime.tv/home&size=128",
         "apiVersion": 1,
-        "fileHash": "sha256-b6f502c262e2ee69d783a50fc2b50714b82f4e10aeef3f58b7fa2bcb5f6d02a3",
-        "jarFileSize": 113610,
+        "fileHash": "sha256-2d01a8856aeb80c31b444fec14356532ee6fac2c86727db1b35533bb9fb6df06",
+        "jarFileSize": 132524,
         "jarUrl": "https://raw.githubusercontent.com/cosmix-extensions/test11/builds/HanimeProvider.jar",
-        "jarHash": "sha256-a03f9f625c2cc2a5520c6454d36dd348f7cdfce8da7e220407f9388582dba5c4"
+        "jarHash": "sha256-c879e26cd98c268e6faa813585e8c34b44ca1316ef01b7d7535efb63a825959d"
     }
 ]
