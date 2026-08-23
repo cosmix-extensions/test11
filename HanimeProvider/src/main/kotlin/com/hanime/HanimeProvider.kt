@@ -62,7 +62,7 @@ class HanimeProvider : MainAPI() {
         )
     }
 
-    // Connects to Hanime's official search engine safely without complex JSON builders
+    // Connects to Hanime's official search engine safely and handles pagination perfectly
     private suspend fun fetchFromSearchApi(query: String, page: Int, orderBy: String = "created_at_unix"): List<SearchResponse> {
         val payload = mapOf(
             "search_text" to query,
@@ -75,7 +75,7 @@ class HanimeProvider : MainAPI() {
             "page" to page
         )
         
-        val response = try {
+        val responseText = try {
             app.post(
                 SEARCH_API, 
                 json = payload, 
@@ -85,26 +85,27 @@ class HanimeProvider : MainAPI() {
             return emptyList()
         }
         
-        val searchData = try {
-            AppUtils.parseJson<SearchApiResult>(response)
-        } catch (e: Exception) { 
-            return emptyList() 
-        }
-        
-        val hitsString = searchData.hits ?: "[]"
-        val items = try {
-            AppUtils.parseJson<List<HvsItem>>(hitsString)
-        } catch (e: Exception) { 
-            emptyList() 
-        }
-        
-        return items.mapNotNull { item ->
-            val title = item.name ?: return@mapNotNull null
-            val itemUrl = item.slug?.let { "$mainUrl/videos/hentai/$it" } ?: return@mapNotNull null
-            val poster = item.coverUrl ?: item.posterUrl
-            newAnimeSearchResponse(title, itemUrl, TvType.Others) {
-                this.posterUrl = poster
+        return try {
+            val searchData = AppUtils.parseJson<Map<String, Any>>(responseText)
+            val hitsData = searchData["hits"]
+            
+            // Handles both stringified JSON and normal JSON Array for flawless scrolling
+            val items: List<HvsItem> = if (hitsData is String) {
+                AppUtils.parseJson<List<HvsItem>>(hitsData)
+            } else {
+                AppUtils.parseJson<List<HvsItem>>(AppUtils.toJson(hitsData))
             }
+            
+            items.mapNotNull { item ->
+                val title = item.name ?: return@mapNotNull null
+                val itemUrl = item.slug?.let { "$mainUrl/videos/hentai/$it" } ?: return@mapNotNull null
+                val poster = item.coverUrl ?: item.posterUrl
+                newAnimeSearchResponse(title, itemUrl, TvType.Others) {
+                    this.posterUrl = poster
+                }
+            }
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
@@ -113,18 +114,19 @@ class HanimeProvider : MainAPI() {
             val orderBy = if (request.data == "recently_added") "created_at_unix" else "likes"
             
             try {
+                // Cloudstream pagination (1, 2, 3...) mapped to Hanime pagination (0, 1, 2...)
                 val items = fetchFromSearchApi(query = "", page = page - 1, orderBy = orderBy)
                 if (items.isNotEmpty()) {
                     return newHomePageResponse(
                         listOf(HomePageList(request.name, items, isHorizontalImages = false)),
-                        hasNext = true
+                        hasNext = true // Enables scrolling for page 2, 3, etc.
                     )
                 }
             } catch (e: Exception) {
                 Log.e("Hanime", "Main API failed: ${e.message}")
             }
 
-            // HTML Fallback if API fails
+            // HTML Fallback only applies to page 1 if API goes down
             if (request.data == "recently_added" && page == 1) {
                 val doc = app.get(mainUrl).document
                 val home = doc.select("a[href^=/videos/hentai/]").mapNotNull {
@@ -173,7 +175,7 @@ class HanimeProvider : MainAPI() {
     override suspend fun search(query: String, page: Int): SearchResponseList {
         try {
             val items = fetchFromSearchApi(query = query, page = page - 1)
-            return newSearchResponseList(items, hasNext = items.size >= 20)
+            return newSearchResponseList(items, hasNext = items.isNotEmpty())
         } catch (e: Exception) {
             Log.e("Hanime", "Search query error: ${e.message}")
         }
@@ -190,8 +192,11 @@ class HanimeProvider : MainAPI() {
             val title = json.hentai_video?.name ?: slug
             val description = json.hentai_video?.description?.replace(Regex("<[^>]*>"), "")?.trim()
             val portrait = json.hentai_video?.cover_url     
-            val landscape = json.hentai_video?.poster_url  
+            val landscape = json.hentai_video?.poster_url  // This is the Video Thumbnail
             val tagsList = json.hentai_video?.hentai_tags?.mapNotNull { it.text } ?: emptyList()
+            
+            // Set thumbnail priority to landscape (Video Thumbnail) first
+            val videoThumbnail = landscape ?: portrait
             
             val episodesList = json.hentai_franchise?.hentai_franchise_hentai_videos
             val episodes = if (!episodesList.isNullOrEmpty()) {
@@ -207,14 +212,15 @@ class HanimeProvider : MainAPI() {
                     newEpisode(url) {
                         this.name = title
                         this.episode = 1
-                        this.posterUrl = landscape ?: portrait
+                        this.posterUrl = videoThumbnail
                     }
                 )
             }
             
             return newTvSeriesLoadResponse(title, url, TvType.Others, episodes) {
-                this.posterUrl = portrait ?: landscape 
-                this.backgroundPosterUrl = landscape ?: portrait 
+                // Now Details Page will show the Video Thumbnail
+                this.posterUrl = videoThumbnail 
+                this.backgroundPosterUrl = videoThumbnail 
                 this.plot = description
                 this.tags = tagsList
             }
@@ -231,6 +237,8 @@ class HanimeProvider : MainAPI() {
             
             val landscapeHtml = posterMatch ?: doc.selectFirst("meta[property=og:image]")?.attr("content")
             val portraitHtml = coverMatch ?: landscapeHtml
+            
+            val videoThumbnailHtml = landscapeHtml ?: portraitHtml
             
             val moreFromHeader = doc.select("h2:contains(More from)").firstOrNull()
             val seriesTitle = moreFromHeader?.text()?.replace("More from", "", ignoreCase = true)?.trim() ?: title
@@ -251,13 +259,13 @@ class HanimeProvider : MainAPI() {
                 newEpisode(url) {
                     this.name = title
                     this.episode = 1
-                    this.posterUrl = landscapeHtml ?: portraitHtml
+                    this.posterUrl = videoThumbnailHtml
                 }
             )
             
             return newTvSeriesLoadResponse(seriesTitle, url, TvType.Others, episodes) {
-                this.posterUrl = portraitHtml ?: landscapeHtml
-                this.backgroundPosterUrl = landscapeHtml ?: portraitHtml
+                this.posterUrl = videoThumbnailHtml
+                this.backgroundPosterUrl = videoThumbnailHtml
                 this.plot = description
             }
         }
@@ -277,7 +285,6 @@ class HanimeProvider : MainAPI() {
 
         Log.d("Hanime", "slug=$slug time=$time")
 
-        // Simple string JSON - no complex builders needed
         val payloadJson = """{"timestamp_unix":${time.toLong()},"directive":"htv_player_handshake","slug":"$slug"}"""
 
         val encryptedToken = runCatching {
@@ -298,7 +305,6 @@ class HanimeProvider : MainAPI() {
             "referer" to "$mainUrl/"
         )
 
-        // Standard map for JSON payload
         val jsonBody = mapOf("token" to encryptedToken)
 
         val response = runCatching {
@@ -354,11 +360,6 @@ class HanimeProvider : MainAPI() {
         }
         return true
     }
-
-    // Safe Data Classes
-    data class SearchApiResult(
-        @JsonProperty("hits") val hits: String?
-    )
 
     data class HvsItem(
         @JsonProperty("name") val name: String?,
