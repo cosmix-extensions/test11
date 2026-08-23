@@ -345,3 +345,4 @@ class HanimeProvider : MainAPI() {
         @JsonProperty("tags") val tags: List<String>?
     )
 }
+
