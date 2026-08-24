@@ -1,111 +1,348 @@
 package com.hanime
 
 import com.fasterxml.jackson.annotation.JsonProperty
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import com.lagradost.api.Log
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.Base64
-import javax.crypto.Cipher
-import javax.crypto.spec.GCMParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
-object HanimeExtractor {
+class HanimeProvider : MainAPI() {
+    override var mainUrl              = "https://hanime.tv"
+    override var name                 = "Hanime"
+    override val hasMainPage          = true
+    override var lang                 = "en"
+    override val hasQuickSearch       = false
+    override val supportedTypes       = setOf(TvType.Others)
+    override val vpnStatus            = VPNStatus.MightBeNeeded
 
-    private const val HANDSHAKE_KEY_SEED = "htv-insecure-handshake-v1"
-    private const val AAD = "htv-insecure-v1"
-    private const val SIGNATURE_SECRET = "Xkdi29"
-    private const val SIGNATURE_VERSION = "mn2"
-
-    private val handshakeKey: ByteArray by lazy {
-        sha256(HANDSHAKE_KEY_SEED.toByteArray(Charsets.UTF_8))
+    companion object {
+        private var searchCache: List<HvsItem>? = null
+        private var cacheTime: Long = 0L
+        private const val CACHE_TTL = 3_600_000L
+        private const val FAH_API = "https://guest.freeanimehentai.net"
+        private const val SEARCH_API = "$FAH_API/api/v11/search_hvs"
+        private const val AUTH_API = "https://auth.hanime.tv"
     }
 
-    private val aadBytes: ByteArray = AAD.toByteArray(Charsets.UTF_8)
+    override val mainPage = mainPageOf(
+        "recently_added" to "Recently Added",
+        "trending" to "Trending",
+        "top_liked" to "Top Liked",
+        "uncensored" to "Uncensored",
+        "virgin" to "Virgin",
+        "ahegao" to "Ahegao",
+        "anal" to "Anal",
+        "big%20boobs" to "Big Boobs",
+        "blow%20job" to "Blow Job",
+        "boob%20job" to "Boob Job",
+        "censored" to "Censored",
+        "cosplay" to "Cosplay",
+        "hand%20job" to "Hand Job",
+        "harem" to "Harem",
+        "horror" to "Horror",
+        "incest" to "Incest",
+        "maid" to "Maid",
+        "masturbation" to "Masturbation",
+        "milf" to "Milf",
+        "monster" to "Monster",
+        "nurse" to "Nurse",
+        "public%20sex" to "Public Sex",
+        "school%20girl" to "School Girl",
+        "teacher" to "Teacher",
+        "watersports" to "Watersports",
+        "x-ray" to "X-ray"
+    )
 
-    fun generateSignature(time: String, mainUrl: String): String {
-        val message = "$time,$SIGNATURE_SECRET,$mainUrl,$SIGNATURE_VERSION,$time"
-        return sha256(message.toByteArray()).joinToString("") { "%02x".format(it) }
+    private fun getHeaders(): Map<String, String> {
+        val time = (System.currentTimeMillis() / 1000).toString()
+        val signature = HanimeExtractor.generateSignature(time, mainUrl)
+        return mapOf(
+            "Origin" to mainUrl,
+            "Referer" to "$mainUrl/",
+            "X-Signature-Version" to "web2",
+            "X-Time" to time,
+            "X-Signature" to signature,
+            "Content-Type" to "application/json"
+        )
     }
 
-    fun encryptHandshakeToken(payload: String): String {
-        val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
+    private fun HvsItem.toSearchResponse(): SearchResponse? {
+        val title = name ?: return null
+        val itemUrl = slug?.let { "$mainUrl/videos/hentai/$it" } ?: return null
+        val poster = posterUrl ?: coverUrl
+        val cover = coverUrl ?: posterUrl
+        return newAnimeSearchResponse(title, itemUrl, TvType.Others) {
+            this.posterUrl = cover
+        }
+    }
 
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(handshakeKey, "AES"), GCMParameterSpec(128, iv))
-        cipher.updateAAD(aadBytes)
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (request.data == "recently_added" || request.data == "top_liked") {
+            val videos = fetchSearchCache()
+            if (videos.isEmpty()) return newHomePageResponse(emptyList(), false)
 
-        val ctWithTag = cipher.doFinal(payload.toByteArray(Charsets.UTF_8))
-        val ct = ctWithTag.copyOfRange(0, ctWithTag.size - 16)
-        val tag = ctWithTag.copyOfRange(ctWithTag.size - 16, ctWithTag.size)
+            val sorted = if (request.data == "recently_added") {
+                videos.sortedByDescending { it.createdAtUnix ?: 0L }
+            } else {
+                videos.sortedByDescending { it.likes ?: 0 }
+            }
 
-        val innerJson = buildJsonObject {
-            put("v", 1)
-            put("alg", "AES-256-GCM")
-            put("iv", base64UrlEncode(iv))
-            put("tag", base64UrlEncode(tag))
-            put("data", base64UrlEncode(ct))
+            val items = sorted.drop((page - 1) * 24).take(24).mapNotNull { it.toSearchResponse() }
+            
+            return newHomePageResponse(
+                listOf(HomePageList(request.name, items, isHorizontalImages = false)),
+                hasNext = items.isNotEmpty()
+            )
+        }
+
+        val url = when (request.data) {
+            "trending" -> "$mainUrl/browse/trending?page=$page"
+            else -> "$mainUrl/browse/tags/${request.data}?page=$page"
+        }
+        val document = app.get(url).document
+
+        val home = document.select("div.grid.grid-cols-2 a[href^=/videos/hentai/]").mapNotNull {
+            val href   = it.attr("href")
+            val title  = it.selectFirst("h3")?.text() ?: return@mapNotNull null
+            val poster = it.selectFirst("img")?.attr("abs:src") ?: return@mapNotNull null
+            if (title.isBlank() || href.isBlank()) return@mapNotNull null
+
+            newAnimeSearchResponse(
+                name = title,
+                url  = href,
+                type = TvType.Others
+            ) {
+                this.posterUrl     = poster
+                this.posterHeaders = mapOf("Referer" to "$mainUrl/")
+            }
+        }
+
+        return newHomePageResponse(
+            listOf(
+                HomePageList(
+                    name               = request.name,
+                    list               = home,
+                    isHorizontalImages = false
+                )
+            ),
+            hasNext = home.isNotEmpty()
+        )
+    }
+
+    override suspend fun search(query: String, page: Int): SearchResponseList {
+        val videos = fetchSearchCache()
+        if (videos.isEmpty()) return newSearchResponseList(emptyList(), hasNext = false)
+
+        val q = query.lowercase().trim()
+        if (q.isBlank()) return newSearchResponseList(emptyList(), hasNext = false)
+
+        val filtered = videos.filter { v ->
+            (v.name ?: "").contains(q, ignoreCase = true) ||
+                    (v.searchTitles ?: "").contains(q, ignoreCase = true) ||
+                    (v.tags ?: emptyList()).any { it.contains(q, ignoreCase = true) }
+        }
+
+        val sorted = filtered.sortedWith(
+            compareByDescending<HvsItem> { v ->
+                var score = 0
+                if (v.name?.contains(q, ignoreCase = true) == true) score += 100
+                if (v.searchTitles?.contains(q, ignoreCase = true) == true) score += 50
+                if (v.tags?.any { it.equals(q, ignoreCase = true) } == true) score += 10
+                score
+            }.thenByDescending { it.createdAtUnix ?: 0L }
+        )
+
+        val pageSize = 24
+        val startIndex = (page - 1) * pageSize
+        val endIndex = minOf(startIndex + pageSize, sorted.size)
+        val pageItems = if (startIndex < sorted.size) sorted.subList(startIndex, endIndex) else emptyList()
+
+        return newSearchResponseList(
+            pageItems.mapNotNull { it.toSearchResponse() },
+            hasNext = endIndex < sorted.size
+        )
+    }
+
+    private suspend fun fetchSearchCache(): List<HvsItem> {
+        val now = System.currentTimeMillis()
+        searchCache?.takeIf { now - cacheTime < CACHE_TTL }?.let { return it }
+        return runCatching {
+            val response = app.get(SEARCH_API, headers = getHeaders()).text
+            parseJson<List<HvsItem>>(response).also {
+                searchCache = it
+                cacheTime = now
+            }
+        }.getOrNull() ?: searchCache ?: emptyList()
+    }
+
+    override suspend fun load(url: String): LoadResponse? {
+        val slug = url.substringAfterLast("/")
+
+        // Fetch from cached HVS list for accurate metadata
+        val hvsList = fetchSearchCache()
+        val item = hvsList.find { it.slug == slug } ?: return null
+        
+        val title = item.name ?: return null
+        val description = item.description?.replace(Regex("<[^>]*>"), "")?.trim()
+        val cover = item.coverUrl
+        val background = item.posterUrl
+        val tagsList = item.tags
+        val doc = app.get(url, headers = getHeaders()).document
+        val moreFromHeader = doc.select("h2:contains(More from)").firstOrNull()
+        val seriesTitle = moreFromHeader?.text()?.replace("More from", "", ignoreCase = true)?.trim() ?: title
+        val recommendationSection = moreFromHeader?.parents()?.select("section")?.firstOrNull() ?: moreFromHeader?.parent()
+        
+        val episodes = recommendationSection?.select("a[href^=/videos/hentai/]")?.mapIndexedNotNull { index, a ->
+            val epTitle  = a.selectFirst("span.line-clamp-2")?.text() ?: a.selectFirst("span.text-white:not(.bg-base-300\\/55)")?.text() ?: return@mapIndexedNotNull null
+            val epPoster = fixUrlNull(a.selectFirst("img")?.attr("abs:src"))
+            val epUrl    = fixUrl(a.attr("href"))
+            
+            newEpisode(epUrl) {
+                this.name = epTitle
+                this.episode = index + 1
+                this.posterUrl = epPoster
+            }
+        } ?: listOf(
+            newEpisode(url) {
+                this.name = title
+                this.episode = 1
+                this.posterUrl = background ?: cover
+            }
+        )
+        
+        return newTvSeriesLoadResponse(seriesTitle, url, TvType.Others, episodes) {
+            this.posterUrl = cover ?: background
+            this.backgroundPosterUrl = background
+            this.plot = description
+            this.tags = tagsList
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (data.isBlank()) return false
+
+        val slug = data.trimEnd('/').substringAfterLast("/").substringBefore("?")
+        val time = (System.currentTimeMillis() / 1000).toString()
+        val signature = HanimeExtractor.generateSignature(time, mainUrl)
+
+        Log.d("Hanime", "slug=$slug time=$time")
+
+        // Build handshake payload
+        val payloadJson = buildJsonObject {
+            put("timestamp_unix", time.toLong())
+            put("directive", "htv_player_handshake")
+            put("slug", slug)
         }.toString()
 
-        return base64UrlEncode(innerJson.toByteArray(Charsets.UTF_8))
+        // Encrypt the payload into a token
+        val encryptedToken = runCatching {
+            HanimeExtractor.encryptHandshakeToken(payloadJson)
+        }.getOrNull() ?: run {
+            Log.e("Hanime", "token encrypt fail")
+            return false
+        }
+
+        // Build handshake request headers
+        val handshakeHeaders = mapOf(
+            "accept" to "application/json",
+            "content-type" to "application/json",
+            "x-signature-version" to "web2",
+            "x-signature" to signature,
+            "x-time" to time,
+            "x-csrf-token" to "null",
+            "origin" to mainUrl,
+            "referer" to "$mainUrl/"
+        )
+
+        // Build JSON body
+        val jsonBody = buildJsonObject {
+            put("token", encryptedToken)
+        }
+
+        // POST handshake
+        val response = runCatching {
+            app.post(
+                "$AUTH_API/api/v11/handshake",
+                headers = handshakeHeaders,
+                json = jsonBody,
+                allowRedirects = true
+            )
+        }.getOrNull() ?: run {
+            Log.e("Hanime", "handshake request fail")
+            return false
+        }
+
+        if (!response.isSuccessful) {
+            Log.e("Hanime", "handshake fail code=${response.code}")
+            return false
+        }
+
+        // Get x-token from response headers
+        val xToken = response.headers["x-token"] ?: response.headers["X-Token"] ?: run {
+            Log.e("Hanime", "x-token missing")
+            return false
+        }
+
+        // Decrypt x-token to get video sources
+        val decryptedJson = runCatching { HanimeExtractor.decryptXToken(xToken) }.getOrNull() ?: run {
+            Log.e("Hanime", "x-token decrypt fail")
+            return false
+        }
+
+        val handshakeResponse = try {
+            parseJson<HanimeExtractor.HandshakeResponse>(decryptedJson)
+        } catch (e: Exception) {
+            Log.e("Hanime", "parse fail: ${e.message}")
+            return false
+        }
+
+        Log.d("Hanime", "sources=${handshakeResponse.sources.size}")
+
+        // Add each video source
+        for (source in handshakeResponse.sources) {
+            if (source.kind != "normal" || source.src.isBlank()) {
+                Log.d("Hanime", "skip kind=${source.kind} label=${source.label}")
+                continue
+            }
+
+            val fullUrl = if (source.src.startsWith("http")) source.src else "$mainUrl${source.src}"
+
+            Log.d("Hanime", "label=${source.label} height=${source.height} url=$fullUrl")
+
+            callback(
+                newExtractorLink(
+                    source = "Hanime",
+                    name = "Hanime - ${source.label.ifBlank { "${source.height}p" }}",
+                    url = fullUrl,
+                    type = ExtractorLinkType.M3U8
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = source.height
+                }
+            )
+        }
+        return true
     }
 
-    fun decryptXToken(xToken: String): String {
-        val outerJson = String(base64UrlDecode(xToken), Charsets.UTF_8)
-        val parsed = Json.parseToJsonElement(outerJson).jsonObject
-
-        val iv = base64UrlDecode(parsed["iv"]!!.jsonPrimitive.content)
-        val tag = base64UrlDecode(parsed["tag"]!!.jsonPrimitive.content)
-        val data = base64UrlDecode(parsed["data"]!!.jsonPrimitive.content)
-
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(handshakeKey, "AES"), GCMParameterSpec(128, iv))
-        cipher.updateAAD(aadBytes)
-
-        return String(cipher.doFinal(data + tag), Charsets.UTF_8)
-    }
-
-    private fun sha256(bytes: ByteArray): ByteArray =
-        MessageDigest.getInstance("SHA-256").digest(bytes)
-
-    private fun base64UrlEncode(bytes: ByteArray): String =
-        Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
-
-    private fun base64UrlDecode(s: String): ByteArray {
-        val padded = if (s.length % 4 != 0) {
-            s + "=".repeat(4 - (s.length % 4))
-        } else s
-        return Base64.getUrlDecoder().decode(padded)
-    }
-
-    @Serializable
-    data class HandshakeResponse(
-        @JsonProperty("sources")
-        @SerialName("sources")
-        val sources: List<HanimeSource> = emptyList()
-    )
-
-    @Serializable
-    data class HanimeSource(
-        @JsonProperty("src")
-        @SerialName("src")
-        val src: String = "",
-
-        @JsonProperty("height")
-        @SerialName("height")
-        val height: Int = 0,
-
-        @JsonProperty("label")
-        @SerialName("label")
-        val label: String = "",
-
-        @JsonProperty("kind")
-        @SerialName("kind")
-        val kind: String = "normal"
+    // Data classes to parse the Hanime search JSON API
+    data class HvsItem(
+        @JsonProperty("name") val name: String?,
+        @JsonProperty("search_titles") val searchTitles: String?,
+        @JsonProperty("slug") val slug: String?,
+        @JsonProperty("description") val description: String?,
+        @JsonProperty("views") val views: Long?,
+        @JsonProperty("cover_url") val coverUrl: String?,
+        @JsonProperty("poster_url") val posterUrl: String?,
+        @JsonProperty("likes") val likes: Int?,
+        @JsonProperty("created_at_unix") val createdAtUnix: Long?,
+        @JsonProperty("tags") val tags: List<String>?
     )
 }
+
