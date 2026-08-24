@@ -61,6 +61,7 @@ class HanimeProvider : MainAPI() {
         return mapOf(
             "Origin" to mainUrl,
             "Referer" to "$mainUrl/",
+            "Accept" to "application/json",
             "X-Signature-Version" to "web2",
             "X-Time" to time,
             "X-Signature" to signature,
@@ -165,15 +166,34 @@ class HanimeProvider : MainAPI() {
         )
     }
 
+    /**
+     * Fetches and caches the HVS video list.
+     *
+     * NOTE: The API changed its response format. It used to return a plain JSON array:
+     *   [ {...}, {...} ]
+     * Now it returns a wrapped object:
+     *   { "data": [ {...}, {...} ], "ads": {...} }
+     * We support BOTH formats so the provider keeps working either way.
+     */
     private suspend fun fetchSearchCache(): List<HvsItem> {
         val now = System.currentTimeMillis()
         searchCache?.takeIf { now - cacheTime < CACHE_TTL }?.let { return it }
         return runCatching {
             val response = app.get(SEARCH_API, headers = getHeaders()).text
-            parseJson<List<HvsItem>>(response).also {
-                searchCache = it
+
+            // Try the new wrapped format first: {"data": [...]}
+            val items = runCatching {
+                parseJson<SearchHvsResponse>(response).data
+            }.getOrElse {
+                // Fallback: old plain array format
+                parseJson<List<HvsItem>>(response)
+            }
+
+            if (items.isNotEmpty()) {
+                searchCache = items
                 cacheTime = now
             }
+            items
         }.getOrNull() ?: searchCache ?: emptyList()
     }
 
@@ -331,6 +351,11 @@ class HanimeProvider : MainAPI() {
         return true
     }
 
+    // Wrapper for the new API response format: {"data": [...], "ads": {...}}
+    data class SearchHvsResponse(
+        @JsonProperty("data") val data: List<HvsItem> = emptyList()
+    )
+
     // Data classes to parse the Hanime search JSON API
     data class HvsItem(
         @JsonProperty("name") val name: String?,
@@ -345,4 +370,3 @@ class HanimeProvider : MainAPI() {
         @JsonProperty("tags") val tags: List<String>?
     )
 }
-
