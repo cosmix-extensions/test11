@@ -36,6 +36,7 @@ jobs:
           cp HanimeProvider/build/HanimeProvider.cs3 build/
           echo '{
             "name": "Hanime Provider",
+            "iconUrl": "https://raw.githubusercontent.com/cosmix-extensions/test11/refs/heads/main/assets/icons/hanime.png",
             "description": "Hanime - Anime Streaming Extension",
             "manifestVersion": 1,
             "pluginLists": [
@@ -50,3 +51,4 @@ jobs:
           folder: build
           clean: false
           token: ${{ secrets.GITHUB_TOKEN }}
+          
